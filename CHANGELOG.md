@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - Detekt 1.23.7 wired into Gradle with the three architecture-mandated rules: `GlobalCoroutineUsage`, `ForbiddenMethodCall` (println / print), and a placeholder for the missing-`@Serializable`-on-repository-types rule scoped to Story 1.10.
 - `.github/pull_request_template.md` with the architecture-pattern discipline checklist.
 - `SecureStorage` over `EncryptedSharedPreferences` with `MasterKey.Builder` (AES-256-GCM, non-extractable) — Story 1.4. Single shared file `vs_secure_prefs` for all V1 persisted state; nine-method API (`readJson`/`writeJson`/`readString`/`writeString`/`readLong`/`writeLong`/`readBoolean`/`writeBoolean`/`clear`); `AppContainer.secureStorage` lazy field; instrumented round-trip test.
+- `RateLimitRepository` (interface + impl) — 30 captures / device / UTC-day, persisted via `SecureStorage` (keys `rate_limit_count_today`, `rate_limit_date`), reset at UTC midnight, debug-bypassable via `BuildConfig.SKIP_RATE_LIMIT`. `AppContainer.rateLimitRepository` lazy field. JVM unit tests cover first-call-of-day, 30+1 cap, midnight rollover with injected `Clock`, debug bypass, persistence-survives-instance, and 50-way concurrent contention. Story 1.5.
 
 ### Changed
 

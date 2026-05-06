@@ -1,6 +1,8 @@
 package com.verisphere.app
 
 import android.content.Context
+import com.verisphere.app.storage.RateLimitRepository
+import com.verisphere.app.storage.RateLimitRepositoryImpl
 import com.verisphere.app.storage.SecureStorage
 
 /**
@@ -29,9 +31,12 @@ class AppContainer(private val applicationContext: Context) {
         SecureStorage(applicationContext)
     }
 
-    // TODO Story 1.5: val rateLimitRepository: RateLimitRepository by lazy {
-    //     RateLimitRepositoryImpl(secureStorage)
-    // }
+    val rateLimitRepository: RateLimitRepository by lazy {
+        RateLimitRepositoryImpl(
+            readLong = secureStorage::readLong,
+            writeLong = secureStorage::writeLong,
+        )
+    }
 
     // TODO Story 1.9: val httpClient: OkHttpClient by lazy { ... }
     // TODO Story 1.9: val geminiClient: GeminiClient by lazy {
