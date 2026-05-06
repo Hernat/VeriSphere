@@ -15,6 +15,12 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - GitHub Actions CI workflows (Story 1.3): `pr.yml` (lint + unit tests + assemble-debug), `main.yml` (same + Detekt), `release.yml` (signed assembleRelease + GitHub Release upload on tag, currently unsigned until Story 7.3 wires the keystore).
 - Detekt 1.23.7 wired into Gradle with the three architecture-mandated rules: `GlobalCoroutineUsage`, `ForbiddenMethodCall` (println / print), and a placeholder for the missing-`@Serializable`-on-repository-types rule scoped to Story 1.10.
 - `.github/pull_request_template.md` with the architecture-pattern discipline checklist.
+- `SecureStorage` over `EncryptedSharedPreferences` with `MasterKey.Builder` (AES-256-GCM, non-extractable) — Story 1.4. Single shared file `vs_secure_prefs` for all V1 persisted state; nine-method API (`readJson`/`writeJson`/`readString`/`writeString`/`readLong`/`writeLong`/`readBoolean`/`writeBoolean`/`clear`); `AppContainer.secureStorage` lazy field; instrumented round-trip test.
+
+### Changed
+
+- Bumped `androidx.security:security-crypto` from `1.1.0-alpha06` to `1.1.0` GA (Maven check 2026-05-06; deferred-work item from Story 1.1 closed).
+- `proguard-rules.pro`: added `-dontwarn com.google.errorprone.annotations.**` so R8 minify succeeds against the new Tink dependency pulled in by `security-crypto:1.1.0` GA.
 
 ## [0.1.0] - unreleased
 

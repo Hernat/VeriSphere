@@ -1,6 +1,7 @@
 package com.verisphere.app
 
 import android.content.Context
+import com.verisphere.app.storage.SecureStorage
 
 /**
  * Single dependency-injection graph for the whole application.
@@ -24,9 +25,9 @@ import android.content.Context
  */
 class AppContainer(private val applicationContext: Context) {
 
-    // TODO Story 1.4: val secureStorage: SecureStorage by lazy {
-    //     SecureStorage(applicationContext)
-    // }
+    val secureStorage: SecureStorage by lazy {
+        SecureStorage(applicationContext)
+    }
 
     // TODO Story 1.5: val rateLimitRepository: RateLimitRepository by lazy {
     //     RateLimitRepositoryImpl(secureStorage)
