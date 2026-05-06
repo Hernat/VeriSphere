@@ -40,3 +40,12 @@
 #
 # Compose keep rules are auto-handled by the kotlin.compose plugin.
 # ──────────────────────────────────────────────────────────────────────
+
+# AndroidX Security 1.1.0 GA pulls in com.google.crypto.tink (the
+# replacement library Google now points the security-crypto API towards).
+# Tink references com.google.errorprone.annotations.* as compile-time
+# annotations only; they are not packaged at runtime, and AndroidX
+# Security's consumer-rules.pro does not include the dontwarn for them.
+# Without this rule, :app:minifyReleaseWithR8 fails with "Missing class
+# com.google.errorprone.annotations.*". Added in Story 1.4.
+-dontwarn com.google.errorprone.annotations.**

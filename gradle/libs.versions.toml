@@ -14,7 +14,7 @@ composeBom = "2024.09.00"
 # Added by Story 1.1 — VeriSphere V1 dependency set
 okhttp = "4.12.0"                         # D3.1 (architecture cited 5.3.0; 4.12 is the GA-stable 4.x line, sufficient for V1)
 kotlinxSerialization = "1.7.3"            # D3.2 — Kotlin 2.0.21 compatible
-securityCrypto = "1.1.0-alpha06"          # D1.6 — has MasterKey.Builder (AES-256-GCM, non-extractable)
+securityCrypto = "1.1.0"                  # D1.6 — MasterKey.Builder (AES-256-GCM, non-extractable). Bumped alpha06 → 1.1.0 GA in Story 1.4 (Maven check 2026-05-06).
 lifecycleViewmodelCompose = "2.6.1"       # D4.2 — aligned with lifecycle-runtime-ktx 2.6.1
 turbine = "1.1.0"                         # Test helper for Flow/StateFlow assertions
 
