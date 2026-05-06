@@ -5,8 +5,10 @@
 
 # Strip diagnostic logging in release builds (NFR7 — no remote logging,
 # no leaked OCR / API key / prompt / session content via shipped logs).
-# Log.w and Log.e are kept for local-only diagnostics on the user's
-# device (Logcat); they never leave the device.
+# This strips Log.d, Log.v, AND Log.i (architecture decision D5.5).
+# Log.w (warnings) and Log.e (errors) survive R8 minification and are
+# the only severity levels available in release; they are local-only
+# (Logcat on the user's device) and never leave the device.
 -assumenosideeffects class android.util.Log {
     public static *** d(...);
     public static *** v(...);

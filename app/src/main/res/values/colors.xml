@@ -14,6 +14,7 @@
 
     <!-- Brand accent — Google Blue (FR14, "Powered by Google" trust transfer) -->
     <color name="vs_brand_google_blue">#4285F4</color>
+    <color name="vs_on_brand_google_blue">#FFFFFF</color>
 
     <!-- Verdict semantic colours (Google green / red / amber / neutral grey) -->
     <color name="vs_verdict_true">#1E8E3E</color>

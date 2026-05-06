@@ -31,10 +31,12 @@ fun VeriSphereTheme(
     val onBackground = colorResource(R.color.vs_on_background)
     val onBackgroundMuted = colorResource(R.color.vs_on_background_muted)
     val brandAccent = colorResource(R.color.vs_brand_google_blue)
+    val onBrandAccent = colorResource(R.color.vs_on_brand_google_blue)
 
     val colorScheme = if (darkTheme) {
         darkColorScheme(
             primary = brandAccent,
+            onPrimary = onBrandAccent,
             background = background,
             surface = background,
             surfaceVariant = surfaceVariant,
@@ -45,6 +47,7 @@ fun VeriSphereTheme(
     } else {
         lightColorScheme(
             primary = brandAccent,
+            onPrimary = onBrandAccent,
             background = background,
             surface = background,
             surfaceVariant = surfaceVariant,

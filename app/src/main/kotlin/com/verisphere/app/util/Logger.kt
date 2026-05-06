@@ -29,5 +29,9 @@ fun tag(name: String): String = "VS.$name"
  *
  *     Log.d(TAG, "Received response of size ${redact(rawJson)}")
  *     // → "Received response of size <redacted 1247 chars>"
+ *
+ * Empty values render as `<redacted (empty)>` to avoid leaking the
+ * fact that the underlying value was zero-length.
  */
-fun redact(value: String): String = "<redacted ${value.length} chars>"
+fun redact(value: String): String =
+    if (value.isEmpty()) "<redacted (empty)>" else "<redacted ${value.length} chars>"

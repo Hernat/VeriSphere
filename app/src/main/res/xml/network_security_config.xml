@@ -1,17 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  VeriSphere — HTTPS-only network policy (D2.5).
+  VeriSphere — HTTPS-only network policy (D2.5 / AR7 / AC #8).
 
   - cleartextTrafficPermitted="false" globally: no http:// traffic anywhere,
     even in debug. Catches misconfiguration early.
-  - No certificate pinning in V1: solo-dev side-project trade-off (the cost
-    of a cert rotation surprise outweighs the marginal MITM hardening on a
-    device-class threat model).
-  - Domain allow-listing (only generativelanguage.googleapis.com and
-    raw.githubusercontent.com may be contacted) is enforced in code by
-    GeminiClient and VersionChecker, NOT by this XML — Android's network
-    security config does not provide that primitive.
+  - The two <domain-config> blocks document the V1 allow-list and pin
+    HTTPS-only on each. NSC enforces TLS rules per-domain, not which
+    domains the app may reach — positive whitelisting (this is the only
+    server VeriSphere ever talks to) lives in code:
+      * GeminiClient (Story 1.9) → generativelanguage.googleapis.com
+      * VersionChecker (Story 6.1) → raw.githubusercontent.com
+    Listing the domains here prepares the file for future TLS pinning
+    (Story 7) without rewriting the schema.
+  - No certificate pinning in V1: solo-dev side-project trade-off (the
+    cost of a cert rotation surprise outweighs the marginal MITM
+    hardening on a device-class threat model).
 -->
 <network-security-config>
+
     <base-config cleartextTrafficPermitted="false" />
+
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="false">generativelanguage.googleapis.com</domain>
+    </domain-config>
+
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="false">raw.githubusercontent.com</domain>
+    </domain-config>
+
 </network-security-config>

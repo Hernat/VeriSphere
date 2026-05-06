@@ -6,7 +6,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Surface
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -35,11 +36,19 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * Placeholder body. Wraps content in a Material 3 `Scaffold` so the
+ * status / navigation bar insets propagate correctly under
+ * `enableEdgeToEdge()` — without this the placeholder text would
+ * draw under the system bars on devices that respect inset reporting.
+ */
 @Composable
 private fun BootstrapPlaceholder() {
-    Surface(modifier = Modifier.fillMaxSize()) {
+    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
             contentAlignment = Alignment.Center,
         ) {
             Text(text = stringResource(R.string.app_name))
