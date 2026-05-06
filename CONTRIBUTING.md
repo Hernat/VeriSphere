@@ -85,8 +85,11 @@ Prefer atomic commits (one logical change per commit) over mega-commits. The sto
 
 - Branch off `main`.
 - Open a PR against `main` once your changes are ready.
-- The PR template lands with **Story 1.3** — until then, please describe what changed and why in the PR body.
-- CI lint + unit tests + assembleDebug land with **Story 1.3** — until then, please run `./gradlew :app:testDebugUnitTest && ./gradlew :app:assembleDebug` locally before opening the PR.
+- The PR template at `.github/pull_request_template.md` is auto-populated; fill in the Summary, Story / scope, and Test plan sections, then tick the discipline checklist.
+- CI on every PR runs three required jobs: `lint` (`./gradlew :app:lintDebug`), `unit-tests` (`./gradlew :app:testDebugUnitTest`), and `assemble-debug` (`./gradlew :app:assembleDebug`). Branch protection on `main` requires all three to pass before merge. Detekt runs post-merge on `main` (we recommend `./gradlew :app:detekt` locally before opening the PR — it's faster than waiting for the post-merge red).
+
+> [!IMPORTANT]
+> **Forks are not supported in V1.** GitHub Actions does not pass repository secrets to workflow runs from forks (security feature). Because the build's `BuildConfig.GEMINI_API_KEY` field is populated at Gradle configuration time and the build fails fast when the key is absent, fork PRs will red-X immediately with `GradleException: GEMINI_API_KEY missing`. To contribute, either (a) request push access to a feature branch on this repo from the maintainer, or (b) build and test entirely locally with your own `local.properties` Gemini key, then send the patch as a `git format-patch` series via email or GitHub issue. V2 may revisit fork support if a contributor base materialises.
 
 ## Trademark and scope
 

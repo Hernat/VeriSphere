@@ -20,9 +20,15 @@ GitHub Secrets used by the CI workflows. Set them once via the web UI (`Settings
 
 ```sh
 gh secret set <NAME> -R Hernat/VeriSphere
-# Then paste the value when prompted, or pipe from a file:
-gh secret set <NAME> -R Hernat/VeriSphere --body @path/to/secret.txt
+# Pipe a value from a file (POSIX):
+gh secret set <NAME> -R Hernat/VeriSphere < path/to/secret.txt
+
+# Or pass the file content as the body argument:
+gh secret set <NAME> -R Hernat/VeriSphere --body "$(cat path/to/secret.txt)"
 ```
+
+> [!NOTE]
+> `gh secret set` does **not** support `@file` interpolation — passing `--body @path/to/secret.txt` would store the literal string `@path/to/secret.txt` as the secret value. The `@file` shorthand belongs to `gh api -F` only.
 
 Verify with `gh secret list -R Hernat/VeriSphere`.
 
@@ -40,11 +46,14 @@ Verify with `gh secret list -R Hernat/VeriSphere`.
 # macOS / Linux
 base64 -w 0 release.keystore > release.keystore.b64
 
-# Windows PowerShell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("release.keystore")) > release.keystore.b64
+# Windows PowerShell — IMPORTANT: PowerShell's `>` redirection writes UTF-16 LE
+# with a BOM by default; the resulting file would upload garbage to GitHub.
+# Use [System.IO.File]::WriteAllText with explicit UTF-8 (no BOM) instead:
+$b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("release.keystore"))
+[System.IO.File]::WriteAllText("$PWD\release.keystore.b64", $b64, [System.Text.UTF8Encoding]::new($false))
 
-# Set the secret from the encoded file
-gh secret set RELEASE_KEYSTORE_BASE64 -R Hernat/VeriSphere --body @release.keystore.b64
+# Set the secret from the encoded file (stdin redirect — works on both POSIX and PowerShell):
+gh secret set RELEASE_KEYSTORE_BASE64 -R Hernat/VeriSphere < release.keystore.b64
 ```
 
 ## Release procedure (7-step distribution flow)
@@ -93,6 +102,37 @@ Field rules:
 - `latestVersion` — exact match against `BuildConfig.VERSION_NAME` parsed by the in-app checker. Must match the `version.properties` source-of-truth from step 1.
 - `downloadUrl` — the Drive share link for the primary distribution channel. The GitHub Release asset URL works as a mirror but the architecture (D5.10) specifies Drive as the primary channel.
 - `releasedAt` — ISO-8601 `YYYY-MM-DD` (architecture format pattern). Today's date.
+
+## Branch protection on `main`
+
+The `main` branch requires three CI status checks to pass before any merge: `lint`, `unit-tests`, `assemble-debug` (defined in `.github/workflows/pr.yml`). Configuration lives in GitHub server-state, not in the repo — recreate it from a fresh checkout with:
+
+```sh
+# JSON payload kept as a file because PowerShell's stdin redirection adds a UTF-16 BOM
+cat > /tmp/branch-protection.json <<'EOF'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": ["lint", "unit-tests", "assemble-debug"]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": null,
+  "restrictions": null
+}
+EOF
+
+gh api -X PUT repos/Hernat/VeriSphere/branches/main/protection --input /tmp/branch-protection.json
+```
+
+Verify with:
+
+```sh
+gh api repos/Hernat/VeriSphere/branches/main/protection --jq '.required_status_checks'
+```
+
+Expected output: `{"contexts":["lint","unit-tests","assemble-debug"], "strict":true, ...}`.
+
+`enforce_admins: false` lets the maintainer bypass the gate in emergencies; flip to `true` once external contributors are routine.
 
 ## Gemini model GA-status check (pre-release gate)
 

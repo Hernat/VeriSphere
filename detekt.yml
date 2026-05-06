@@ -21,7 +21,9 @@ build:
 config:
   validation: true
   warningsAsErrors: false
-  excludes: ''
+  # `excludes:` intentionally omitted — Detekt's schema validates
+  # config.excludes as a string; we have no patterns to exclude from
+  # validation today. Add as a comma-separated glob string when needed.
 
 # ─── Rulesets explicitly disabled ───────────────────────────────────────
 # Default-on rules that fire on Story 1.1's clean code but lie outside
@@ -52,9 +54,15 @@ coroutines:
   active: true
   GlobalCoroutineUsage:
     active: true
+    severity: error
     # Architecture pattern: every coroutine launches from a scoped owner
     # (Application, Service, viewModelScope). GlobalScope leaks coroutines
     # past their natural owner's lifecycle.
+    #
+    # Coverage gap (deferred-work): only flags direct `GlobalScope.launch`;
+    # ad-hoc `CoroutineScope(Dispatchers.IO).launch { }` is NOT caught.
+    # Story 1.10 decides on a custom rule alongside the @Serializable
+    # placeholder.
 
 style:
   active: true
@@ -102,6 +110,7 @@ style:
     active: false
   ForbiddenMethodCall:
     active: true
+    severity: error
     excludes:
       - '**/test/**'
       - '**/androidTest/**'
@@ -110,6 +119,12 @@ style:
         value: 'kotlin.io.println'
       - reason: 'Use Logger.tag(name) — D2.7. print bypasses the VS.<Component> tag pattern.'
         value: 'kotlin.io.print'
+      - reason: 'Use Logger.tag(name) — D2.7. System.out.println bypasses the VS.<Component> tag pattern and survives R8 minification.'
+        value: 'java.io.PrintStream.println'
+      - reason: 'Use Logger.tag(name) — D2.7. System.out.print bypasses the VS.<Component> tag pattern.'
+        value: 'java.io.PrintStream.print'
+      - reason: 'Use Logger.tag(name) — D2.7. System.err.println bypasses the VS.<Component> tag pattern.'
+        value: 'java.io.PrintStream.println'
 
 # ─── Custom rule placeholder (TODO Story 1.10) ──────────────────────────
 #

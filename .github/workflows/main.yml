@@ -3,9 +3,10 @@
 # `pr.yml`'s lint + unit-tests + assemble-debug, then adds the Detekt
 # step that hard-fails on any architecture-pattern violation.
 #
-# Detekt is INTENTIONALLY not run in `pr.yml`: pre-merge enforcement
-# happens through code review + the architecture's manual gate. Post-merge
-# Detekt on `main` ensures violations cannot accumulate undetected.
+# Detekt runs on `main` only by default — pre-merge it is the contributor's
+# responsibility (PR template's Test plan recommends `./gradlew :app:detekt`
+# locally before opening a PR). Post-merge Detekt on `main` ensures
+# violations cannot accumulate undetected even if a contributor forgets.
 
 name: Main
 
@@ -15,6 +16,13 @@ on:
 
 permissions:
   contents: read
+
+# Serialize main-branch runs without cancelling. Two rapid pushes (fix-on-fix)
+# both run to completion so build history is preserved, but they don't race
+# on the Gradle cache write.
+concurrency:
+  group: main
+  cancel-in-progress: false
 
 jobs:
   lint:

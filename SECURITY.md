@@ -14,6 +14,7 @@ VeriSphere V1 is an Android app that calls the public Gemini API and persists se
 - **HTTPS only**, enforced by `network_security_config.xml` with `cleartextTrafficPermitted="false"` globally (architecture decision D2.5).
 - **No certificate pinning in V1.** Operational trade-off — the Gemini endpoint is on Google infrastructure and pinning would break legitimate certificate rotation. Re-evaluated when V2 ships.
 - **No remote logging, no telemetry, no analytics.** The only outbound HTTPS traffic is to `generativelanguage.googleapis.com` (Gemini API) and `raw.githubusercontent.com` (version-info JSON fetch). See PRD NFR7 / architecture decision D5.12.
+- **CI secret exposure on `pull_request` builds — accepted posture.** GitHub Actions PR runs on this repo expose `GEMINI_API_KEY` to any code executable during the build (`build.gradle.kts`, Gradle plugins, dependencies) because Story 1.1's fail-fast logic forces the key to be present at Gradle configuration time. A hostile branch on this repo could exfiltrate the key via a one-line build-script change. Mitigation is the same as for the bundled key in shipped APKs: **rate-limiting (D3.7) + rotation runbook (D2.3)**, not obfuscation. External fork PRs do **not** receive repository secrets (GitHub default — workflow runs from forks have an empty `secrets` context for protected workflows). Branch-push access on this repo is restricted to the maintainer; collaborator additions go through GitHub's standard repository-permissions flow.
 
 ## Reporting a vulnerability
 

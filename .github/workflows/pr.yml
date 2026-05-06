@@ -21,7 +21,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: pr-${{ github.head_ref }}
+  # `github.head_ref` is empty on non-`pull_request` events. If a future
+  # story adds `workflow_dispatch:` here, fall back to `github.ref` so two
+  # dispatched runs don't both collapse into a single `pr-` group.
+  group: pr-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:

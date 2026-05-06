@@ -14,20 +14,28 @@
 
 name: Release
 
+# GitHub Actions tag filters use fnmatch-style globs (`*`, `**`, `?`, `[]`,
+# `!`) — `+` is NOT a quantifier, so `[0-9]+` would mean "one digit + literal
+# +". Use semver-style globbing instead so `v0.1.0`, `v1.2.3`, `v0.1.0-rc1`
+# all match.
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-
-permissions:
-  contents: write   # required to create / update GitHub Releases
+      - 'v*.*.*'
 
 jobs:
   release:
     name: Build and publish release APK
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create / update GitHub Releases.
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Don't persist GITHUB_TOKEN to .git/config — softprops/action-gh-release
+          # has its own token input; subsequent steps (incl. Gradle plugins)
+          # have no need for repo write credentials.
+          persist-credentials: false
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -35,15 +43,24 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Decode keystore (no-op until Story 7.3 provisions secrets)
+        shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
-          if [ -z "$KEYSTORE_BASE64" ]; then
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
             echo "::warning::RELEASE_KEYSTORE_BASE64 not set — Story 7.3 ships keystore. Producing unsigned APK."
-          else
-            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
-            echo "Keystore decoded to $RUNNER_TEMP/release.keystore"
+            exit 0
           fi
+          # printf '%s' avoids `echo`'s trailing-newline + backslash-interpretation
+          # quirks; `base64 -d --strict` rejects malformed input loudly instead
+          # of silently writing a partial file.
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d --strict > "$RUNNER_TEMP/release.keystore"
+          if [ ! -s "$RUNNER_TEMP/release.keystore" ]; then
+            echo "::error::Decoded keystore is empty — RELEASE_KEYSTORE_BASE64 is malformed."
+            exit 1
+          fi
+          echo "Keystore decoded to $RUNNER_TEMP/release.keystore"
 
       - name: Build release APK
         env:
@@ -59,7 +76,9 @@ jobs:
 
       - name: Locate built APK
         id: apk
+        shell: bash
         run: |
+          set -euo pipefail
           shopt -s nullglob
           apks=(app/build/outputs/apk/release/*.apk)
           if [ ${#apks[@]} -eq 0 ]; then
