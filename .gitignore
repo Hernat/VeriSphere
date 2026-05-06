@@ -1,0 +1,51 @@
+# ──────────────────────────────────────────────
+# Android Studio / Gradle build artefacts
+# ──────────────────────────────────────────────
+*.iml
+.gradle/
+.kotlin/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+proguard/
+
+# ──────────────────────────────────────────────
+# IntelliJ / Android Studio per-developer config
+# ──────────────────────────────────────────────
+.idea/
+!.idea/codeStyles/
+!.idea/inspectionProfiles/
+
+# ──────────────────────────────────────────────
+# Local secrets and per-machine config
+# ──────────────────────────────────────────────
+local.properties
+*.keystore
+*.jks
+keystore.properties
+
+# ──────────────────────────────────────────────
+# OS noise
+# ──────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ──────────────────────────────────────────────
+# BMad workflow tooling and generated artefacts
+# (kept private — these are workflow internals;
+#  polished docs ship through docs/ when needed)
+# ──────────────────────────────────────────────
+_bmad/
+_bmad-output/
+
+# ──────────────────────────────────────────────
+# Claude Code per-developer settings
+# ──────────────────────────────────────────────
+.claude/
