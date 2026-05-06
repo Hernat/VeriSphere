@@ -1,10 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  VeriSphere palette — UX Step 8 (light variants).
+  Dark counterparts live in values-night/colors.xml.
+  Hex codes never appear inline in Kotlin code (architecture Step 5 rule).
+-->
 <resources>
-    <color name="purple_200">#FFBB86FC</color>
-    <color name="purple_500">#FF6200EE</color>
-    <color name="purple_700">#FF3700B3</color>
-    <color name="teal_200">#FF03DAC5</color>
-    <color name="teal_700">#FF018786</color>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
+
+    <!-- Surfaces -->
+    <color name="vs_background">#FFFFFF</color>
+    <color name="vs_surface_variant">#F8F9FA</color>
+    <color name="vs_on_background">#1F1F1F</color>
+    <color name="vs_on_background_muted">#5F6368</color>
+
+    <!-- Brand accent — Google Blue (FR14, "Powered by Google" trust transfer) -->
+    <color name="vs_brand_google_blue">#4285F4</color>
+
+    <!-- Verdict semantic colours (Google green / red / amber / neutral grey) -->
+    <color name="vs_verdict_true">#1E8E3E</color>
+    <color name="vs_verdict_false">#D93025</color>
+    <color name="vs_verdict_doubtful">#F9AB00</color>
+    <color name="vs_verdict_non_verifiable">#5F6368</color>
+
+    <!-- Failure / state colours -->
+    <color name="vs_state_offline">#1F1F1F</color>
+
+    <!-- Privacy padlock — deliberately distinct from vs_verdict_true (UX Step 8) -->
+    <color name="vs_privacy_padlock">#34A853</color>
+
 </resources>

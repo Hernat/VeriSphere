@@ -1,58 +1,62 @@
 package com.verisphere.app.ui.theme
 
-import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.colorResource
+import com.verisphere.app.R
 
-private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
-)
-
-private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
-)
-
+/**
+ * VeriSphere Material 3 theme — fixed palette, auto-follow-system
+ * light/dark, dynamicColor INTENTIONALLY disabled.
+ *
+ * Shared between MainActivity and BubbleOverlayService Compose hosts;
+ * do not move out of `ui/theme/` without updating both call sites.
+ *
+ * Material You / dynamic colour is disabled in V1 because the
+ * "Powered by Google" trust narrative requires consistent branding
+ * across the user base — not a per-device wallpaper-derived palette.
+ */
 @Composable
 fun VeriSphereTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
-    content: @Composable () -> Unit
+    content: @Composable () -> Unit,
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
+    // Resolve palette tokens once per composition; values/colors.xml vs
+    // values-night/colors.xml are picked by the platform automatically.
+    val background = colorResource(R.color.vs_background)
+    val surfaceVariant = colorResource(R.color.vs_surface_variant)
+    val onBackground = colorResource(R.color.vs_on_background)
+    val onBackgroundMuted = colorResource(R.color.vs_on_background_muted)
+    val brandAccent = colorResource(R.color.vs_brand_google_blue)
 
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
+    val colorScheme = if (darkTheme) {
+        darkColorScheme(
+            primary = brandAccent,
+            background = background,
+            surface = background,
+            surfaceVariant = surfaceVariant,
+            onBackground = onBackground,
+            onSurface = onBackground,
+            onSurfaceVariant = onBackgroundMuted,
+        )
+    } else {
+        lightColorScheme(
+            primary = brandAccent,
+            background = background,
+            surface = background,
+            surfaceVariant = surfaceVariant,
+            onBackground = onBackground,
+            onSurface = onBackground,
+            onSurfaceVariant = onBackgroundMuted,
+        )
     }
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = Typography,
-        content = content
+        typography = VeriSphereTypography,
+        content = content,
     )
 }

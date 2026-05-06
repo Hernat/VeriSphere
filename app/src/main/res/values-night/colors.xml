@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VeriSphere palette — UX Step 8 (dark variants).
+  Auto-applied by the platform when the device is in dark mode.
+  VeriSphereTheme.kt has dynamicColor=false; we follow system light/dark only.
+-->
+<resources>
+
+    <!-- Surfaces -->
+    <color name="vs_background">#121212</color>
+    <color name="vs_surface_variant">#1E1E1E</color>
+    <color name="vs_on_background">#E8E8E8</color>
+    <color name="vs_on_background_muted">#9AA0A6</color>
+
+    <!-- Brand accent — Google Blue, dark variant -->
+    <color name="vs_brand_google_blue">#8AB4F8</color>
+
+    <!-- Verdict semantic colours, dark variants -->
+    <color name="vs_verdict_true">#34A853</color>
+    <color name="vs_verdict_false">#F28B82</color>
+    <color name="vs_verdict_doubtful">#FDD663</color>
+    <color name="vs_verdict_non_verifiable">#9AA0A6</color>
+
+    <!-- Failure / state colours -->
+    <color name="vs_state_offline">#E8E8E8</color>
+
+    <!-- Privacy padlock -->
+    <color name="vs_privacy_padlock">#81C995</color>
+
+</resources>
