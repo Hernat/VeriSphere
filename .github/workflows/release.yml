@@ -1,0 +1,77 @@
+# Release workflow — Story 1.3 skeleton (AR10 / D5.7).
+# Triggers on tags matching `v[0-9]+.[0-9]+.[0-9]+`. Builds the release
+# APK and attaches it to the GitHub Release auto-created for the tag.
+#
+# Story 7.3 finalises this workflow with:
+#   - signingConfigs { release { ... } } wired into app/build.gradle.kts
+#   - APK size verification step (NFR2)
+#   - Corpus runner step (Story 7.1)
+#   - CHANGELOG excerpt extraction in the Release body
+#
+# Until Story 7.3 lands, the keystore secrets may be absent. The decode
+# step is a graceful no-op in that case and produces an UNSIGNED APK
+# (`app-release-unsigned.apk`) which still gets attached to the Release.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write   # required to create / update GitHub Releases
+
+jobs:
+  release:
+    name: Build and publish release APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode keystore (no-op until Story 7.3 provisions secrets)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::RELEASE_KEYSTORE_BASE64 not set — Story 7.3 ships keystore. Producing unsigned APK."
+          else
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "Keystore decoded to $RUNNER_TEMP/release.keystore"
+          fi
+
+      - name: Build release APK
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # The four below are consumed by signingConfigs { release { ... } }
+          # which Story 7.3 wires into app/build.gradle.kts. Until then they
+          # are unused but pass through harmlessly.
+          RELEASE_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease
+
+      - name: Locate built APK
+        id: apk
+        run: |
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/release/*.apk)
+          if [ ${#apks[@]} -eq 0 ]; then
+            echo "::error::No APK found in app/build/outputs/apk/release/"
+            exit 1
+          fi
+          echo "path=${apks[0]}" >> "$GITHUB_OUTPUT"
+          echo "Found APK: ${apks[0]}"
+
+      - name: Upload APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.apk.outputs.path }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true

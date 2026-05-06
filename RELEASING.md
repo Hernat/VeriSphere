@@ -14,13 +14,38 @@ The release keystore is **founder-managed**, kept **outside** the repo, and back
 
 The full procedure — generating the keystore with the right alias and password parameters, encoding it for the GitHub Secret, recovering from a lost keystore — lands with **Story 7.3** alongside the `release.yml` workflow. Until then, the release builds run unsigned (`./gradlew :app:assembleRelease` produces `app-release-unsigned.apk`).
 
-GitHub Secrets used by the release workflow once Story 7.3 lands:
+## GitHub Secrets
 
-- `GEMINI_API_KEY` — the bundled Gemini key for the published APK.
-- `RELEASE_KEYSTORE_BASE64` — base64-encoded keystore.
-- `RELEASE_KEYSTORE_PASSWORD` — keystore password.
-- `RELEASE_KEY_ALIAS` — signing key alias inside the keystore.
-- `RELEASE_KEY_PASSWORD` — signing key password.
+GitHub Secrets used by the CI workflows. Set them once via the web UI (`Settings → Secrets and variables → Actions → New repository secret`) or via the `gh` CLI:
+
+```sh
+gh secret set <NAME> -R Hernat/VeriSphere
+# Then paste the value when prompted, or pipe from a file:
+gh secret set <NAME> -R Hernat/VeriSphere --body @path/to/secret.txt
+```
+
+Verify with `gh secret list -R Hernat/VeriSphere`.
+
+| Secret | Used by | Description |
+|---|---|---|
+| `GEMINI_API_KEY` | `pr.yml`, `main.yml`, `release.yml` | The bundled Gemini API key consumed by `BuildConfig.GEMINI_API_KEY` (D2.2). Without it, every build fails fast with a clear `GradleException` — Story 1.1's intentional behaviour. |
+| `RELEASE_KEYSTORE_BASE64` | `release.yml` | Base64-encoded JKS keystore used to sign release APKs (D2.10). Lands with **Story 7.3**. Until then, `release.yml` produces an unsigned APK. |
+| `RELEASE_KEYSTORE_PASSWORD` | `release.yml` | Keystore password. Lands with **Story 7.3**. |
+| `RELEASE_KEY_ALIAS` | `release.yml` | Signing key alias inside the keystore. Lands with **Story 7.3**. |
+| `RELEASE_KEY_PASSWORD` | `release.yml` | Signing key password. Lands with **Story 7.3**. |
+
+**Encoding the keystore (Story 7.3 reference).** Once the production keystore exists, encode it for the GitHub Secret:
+
+```sh
+# macOS / Linux
+base64 -w 0 release.keystore > release.keystore.b64
+
+# Windows PowerShell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("release.keystore")) > release.keystore.b64
+
+# Set the secret from the encoded file
+gh secret set RELEASE_KEYSTORE_BASE64 -R Hernat/VeriSphere --body @release.keystore.b64
+```
 
 ## Release procedure (7-step distribution flow)
 
