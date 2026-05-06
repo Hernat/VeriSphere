@@ -10,7 +10,11 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - Initial repository documentation skeleton: `LICENSE` (MIT), `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `RELEASING.md`, `CHANGELOG.md` (Story 1.2).
 - `.gitattributes` for consistent line-ending normalisation across platforms (Story 1.2).
-- `local/` entry in `.gitignore` per the AC list (Story 1.2).
+- `/local/` entry in `.gitignore` per the AC list (Story 1.2).
+- `AUTHORS.md` documenting maintainership and AI pair-programming tooling.
+- GitHub Actions CI workflows (Story 1.3): `pr.yml` (lint + unit tests + assemble-debug), `main.yml` (same + Detekt), `release.yml` (signed assembleRelease + GitHub Release upload on tag, currently unsigned until Story 7.3 wires the keystore).
+- Detekt 1.23.7 wired into Gradle with the three architecture-mandated rules: `GlobalCoroutineUsage`, `ForbiddenMethodCall` (println / print), and a placeholder for the missing-`@Serializable`-on-repository-types rule scoped to Story 1.10.
+- `.github/pull_request_template.md` with the architecture-pattern discipline checklist.
 
 ## [0.1.0] - unreleased
 
