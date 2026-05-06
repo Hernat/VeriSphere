@@ -1,21 +1,40 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
+# ──────────────────────────────────────────────────────────────────────
+# VeriSphere — release-only ProGuard / R8 keep + strip rules.
+# Architecture reference: D5.5 (size optimisation, not security obfuscation).
+# ──────────────────────────────────────────────────────────────────────
+
+# Strip diagnostic logging in release builds (NFR7 — no remote logging,
+# no leaked OCR / API key / prompt / session content via shipped logs).
+# Log.w and Log.e are kept for local-only diagnostics on the user's
+# device (Logcat); they never leave the device.
+-assumenosideeffects class android.util.Log {
+    public static *** d(...);
+    public static *** v(...);
+    public static *** i(...);
+}
+
+# ──────────────────────────────────────────────────────────────────────
+# kotlinx.serialization keep rules (D3.2).
+# Reflection-based serializer discovery must survive R8 minification.
+# ──────────────────────────────────────────────────────────────────────
+-keepattributes *Annotation*, InnerClasses
+-dontnote kotlinx.serialization.AnnotationsKt
+
+# Keep generated $$serializer companions for any @Serializable type.
+-keep,includedescriptorclasses class com.verisphere.app.**$$serializer { *; }
+
+# Keep companions that expose serializer() factories.
+-keepclassmembers class com.verisphere.app.** {
+    *** Companion;
+}
+-keepclasseswithmembers class com.verisphere.app.** {
+    kotlinx.serialization.KSerializer serializer(...);
+}
+
+# ──────────────────────────────────────────────────────────────────────
+# OkHttp (4.12) and AndroidX Security (1.1.x) ship their own
+# consumer-rules.pro inside the AAR — auto-merged by R8. No additions
+# needed unless internal APIs are used (none are in V1).
 #
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
-
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
-
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
-
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Compose keep rules are auto-handled by the kotlin.compose plugin.
+# ──────────────────────────────────────────────────────────────────────

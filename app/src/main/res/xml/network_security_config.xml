@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VeriSphere — HTTPS-only network policy (D2.5).
+
+  - cleartextTrafficPermitted="false" globally: no http:// traffic anywhere,
+    even in debug. Catches misconfiguration early.
+  - No certificate pinning in V1: solo-dev side-project trade-off (the cost
+    of a cert rotation surprise outweighs the marginal MITM hardening on a
+    device-class threat model).
+  - Domain allow-listing (only generativelanguage.googleapis.com and
+    raw.githubusercontent.com may be contacted) is enforced in code by
+    GeminiClient and VersionChecker, NOT by this XML — Android's network
+    security config does not provide that primitive.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>
