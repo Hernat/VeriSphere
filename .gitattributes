@@ -1,0 +1,45 @@
+# Default: detect text files automatically; normalise to LF on commit.
+# Windows checkouts still work because Git's core.autocrlf handles the
+# conversion at checkout. The repository itself is canonical-LF.
+* text=auto eol=lf
+
+# Kotlin: richer diffs in tools that recognise the language tag.
+*.kt    text diff=kotlin
+*.kts   text diff=kotlin
+
+# Build / config files: text, LF.
+*.gradle       text eol=lf
+*.properties   text eol=lf
+*.toml         text eol=lf
+*.yml          text eol=lf
+*.yaml         text eol=lf
+*.json         text eol=lf
+*.md           text eol=lf
+*.xml          text eol=lf
+*.pro          text eol=lf
+
+# Gradle wrapper.
+gradlew        text eol=lf
+gradlew.bat    text eol=crlf
+
+# Windows-only scripts must stay CRLF to run reliably.
+*.bat          text eol=crlf
+*.cmd          text eol=crlf
+
+# Shell scripts must stay LF so the `#!` shebang resolves on POSIX systems.
+*.sh           text eol=lf
+
+# Binary files: never normalise, never diff as text.
+*.apk          binary
+*.aab          binary
+*.jar          binary
+*.dex          binary
+*.keystore     binary
+*.jks          binary
+*.png          binary
+*.jpg          binary
+*.jpeg         binary
+*.webp         binary
+*.gif          binary
+*.ico          binary
+*.pdf          binary

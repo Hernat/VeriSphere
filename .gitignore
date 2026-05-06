@@ -29,7 +29,8 @@ local.properties
 *.keystore
 *.jks
 keystore.properties
-local/                # project-internal scratch directory (never committed)
+# Project-internal scratch directory (repo root only; never committed).
+/local/
 
 # ──────────────────────────────────────────────
 # OS noise
