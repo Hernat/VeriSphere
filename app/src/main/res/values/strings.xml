@@ -1,3 +1,15 @@
 <resources>
     <string name="app_name">VeriSphere</string>
+
+    <!-- Story 1.6 — BubbleOverlayService foreground notification (AR19, NFR10) -->
+    <string name="bubble_service_channel_name">VeriSphere Overlay</string>
+    <string name="bubble_service_ready">VeriSphere is ready</string>
+
+    <!-- Story 1.6 — PermissionExplanationScreen (overlay-permission denial path).
+         Full first-launch orchestration is Story 5.2; these strings cover the
+         minimal "denied → explain → re-attempt or exit" flow. -->
+    <string name="permission_overlay_explanation">VeriSphere needs the \"Display over other apps\" permission to show the fact-check bubble while you use other apps.</string>
+    <string name="permission_allow_overlay">Allow overlay</string>
+    <string name="permission_exit">Exit</string>
+    <string name="permission_settings_unavailable">This device does not expose the overlay-permission screen. Please enable \"Display over other apps\" for VeriSphere from your system settings.</string>
 </resources>

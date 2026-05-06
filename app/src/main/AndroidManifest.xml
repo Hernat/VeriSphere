@@ -3,11 +3,23 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-      VeriSphere — exactly 5 permissions (NFR10, AC #6).
+      VeriSphere permissions (NFR10).
       Do NOT add any other permission without an architecture amendment.
         - SYSTEM_ALERT_WINDOW          : floating bubble overlay (D4.10).
         - FOREGROUND_SERVICE           : keep the bubble alive across apps.
         - FOREGROUND_SERVICE_MEDIA_PROJECTION : screen capture (Android 14+).
+        - FOREGROUND_SERVICE_SPECIAL_USE : per-FGS-type permission required
+                                          since Android 14 (API 34) for the
+                                          'specialUse' foreground service
+                                          type that hosts the bubble overlay
+                                          (Story 1.6, D5.2). Without this,
+                                          startForeground silently fails to
+                                          promote the service and the 5s
+                                          deadline check fires
+                                          (ForegroundServiceDidNotStartInTimeException).
+                                          Architecture amendment to D2.6 / NFR10:
+                                          original 5-permission list missed
+                                          this Android 14+ requirement.
         - INTERNET                     : Gemini API + version-info fetch.
         - POST_NOTIFICATIONS           : runtime-requested on API 33+ for the
                                           foreground-service notification.
@@ -18,6 +30,7 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -41,6 +54,29 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          BubbleOverlayService — foreground service hosting the
+          WindowManager overlay window (Story 1.6, AR19, AR20, D4.10).
+
+          foregroundServiceType="specialUse" only in this story.
+          mediaProjection is added DYNAMICALLY at runtime in Story 1.8
+          via Service.setForegroundServiceType(SPECIAL_USE | MEDIA_PROJECTION)
+          when the MP token is acquired (D5.2 — "dynamic switching").
+
+          The <property> declares the special-use subtype required by
+          Google Play policy for the specialUse FGS type. We are not on
+          Play Store in V1 (D5.10, FR22-24) but the architecture mandates
+          the declaration anyway for forward compatibility with V2.
+        -->
+        <service
+            android:name=".bubble.BubbleOverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="persistent_floating_bubble_for_on_demand_ai_verification" />
+        </service>
 
     </application>
 
