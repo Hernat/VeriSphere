@@ -1,0 +1,131 @@
+# ────────────────────────────────────────────────────────────────────────
+# VeriSphere Detekt configuration (Story 1.3, AR11)
+# ────────────────────────────────────────────────────────────────────────
+# This file overlays the Detekt default configuration (loaded because
+# `buildUponDefaultConfig = true` in app/build.gradle.kts).
+#
+# Architecture-mandated rules (architecture.md line 526) — ONLY THESE:
+#   1. GlobalScope usage             → `coroutines > GlobalCoroutineUsage`
+#   2. println / print instead of Log → `style > ForbiddenMethodCall`
+#   3. Missing @Serializable on repository-consumed types → CUSTOM RULE
+#      scoped to Story 1.10 (placeholder below).
+#
+# Every other Detekt ruleset is DISABLED. Detekt is a focused enforcement
+# tool here, not a full-spectrum lint pass — Android Lint already covers
+# the broader catalogue. Stories that want stricter Detekt enforcement
+# must amend this file with explicit rationale.
+
+build:
+  maxIssues: 0      # CI hard-fails on any violation (Story 1.3 AC #2).
+
+config:
+  validation: true
+  warningsAsErrors: false
+  excludes: ''
+
+# ─── Rulesets explicitly disabled ───────────────────────────────────────
+# Default-on rules that fire on Story 1.1's clean code but lie outside
+# the architecture's three mandated checks. Re-enable per-rule only with
+# explicit story scope and architecture amendment.
+
+comments:
+  active: false
+complexity:
+  active: false
+empty-blocks:
+  active: false
+exceptions:
+  active: false
+naming:
+  active: false      # FunctionNaming flags @Composable PascalCase nouns;
+                     # MatchingDeclarationName flags Color.kt / Spacing.kt
+                     # which group thematic tokens (intentional pattern).
+performance:
+  active: false
+potential-bugs:
+  active: false      # UnusedPrivateProperty flags AppContainer's deliberate
+                     # constructor param (Story 1.1 dismissed-review-finding).
+
+# ─── Rulesets selectively active ────────────────────────────────────────
+
+coroutines:
+  active: true
+  GlobalCoroutineUsage:
+    active: true
+    # Architecture pattern: every coroutine launches from a scoped owner
+    # (Application, Service, viewModelScope). GlobalScope leaks coroutines
+    # past their natural owner's lifecycle.
+
+style:
+  active: true
+  # Disable everything in the style ruleset by default; cherry-pick the
+  # one rule the architecture mandates.
+  MaxLineLength:
+    active: false
+  WildcardImport:
+    active: false
+  NewLineAtEndOfFile:
+    active: false
+  MagicNumber:
+    active: false
+  ReturnCount:
+    active: false
+  ThrowsCount:
+    active: false
+  UnusedPrivateMember:
+    active: false
+  UnusedPrivateProperty:
+    active: false      # AppContainer's `applicationContext` is intentional
+                       # (constructor contract for future stories — Story
+                       # 1.1 dismissed-review-finding).
+  ForbiddenComment:
+    active: false
+  UseDataClass:
+    active: false
+  LoopWithTooManyJumpStatements:
+    active: false
+  SerialVersionUIDInSerializableClass:
+    active: false
+  ProtectedMemberInFinalClass:
+    active: false
+  EqualsOnSignatureLine:
+    active: false
+  FunctionOnlyReturningConstant:
+    active: false
+  ExplicitItLambdaParameter:
+    active: false
+  UseCheckOrError:
+    active: false
+  UnnecessaryAbstractClass:
+    active: false
+  UseRequire:
+    active: false
+  ForbiddenMethodCall:
+    active: true
+    excludes:
+      - '**/test/**'
+      - '**/androidTest/**'
+    methods:
+      - reason: 'Use Logger.tag(name) — D2.7. println bypasses the VS.<Component> tag pattern and survives R8 minification.'
+        value: 'kotlin.io.println'
+      - reason: 'Use Logger.tag(name) — D2.7. print bypasses the VS.<Component> tag pattern.'
+        value: 'kotlin.io.print'
+
+# ─── Custom rule placeholder (TODO Story 1.10) ──────────────────────────
+#
+# The third architecture-mandated rule — "missing @Serializable on classes
+# consumed by repositories" — is a CUSTOM rule that does not ship with
+# Detekt out-of-the-box. Decision (Story 1.3): defer to Story 1.10.
+#
+# When Story 1.10 lands HistoryRepository (the first concrete repository
+# that consumes a serialised type, SessionRecord), the implementer either:
+#   (a) ships a custom Detekt rule via dependencies { detektPlugins(...) },
+#   (b) relies on kotlinx.serialization's compile-time @Serializable check
+#       (it already fails the build with a clear error at the use site).
+#
+# Until then, the missing-@Serializable case is caught by:
+#   - kotlinx.serialization compile-time check (build fails)
+#   - Code review (PR template line for repository-consumed types)
+#
+# Do NOT remove this comment block until Story 1.10's implementer makes
+# the explicit call.

@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.detekt)
 }
 
 // ─── version.properties (single source of truth, D5.11) ──────────────────
@@ -130,6 +131,20 @@ android {
         compose = true
         buildConfig = true
     }
+}
+
+// ─── Detekt (Story 1.3, AR11) ────────────────────────────────────────────
+// Architecture-mandated rules: GlobalScope usage, println instead of Log,
+// missing @Serializable on repository-consumed types (the third is a custom
+// rule scoped to Story 1.10 — placeholder in detekt.yml).
+//
+// Detekt is wired here but does NOT gate the main `assemble*` tasks. CI
+// (main.yml) runs `:app:detekt` as a separate step and hard-fails on any
+// violation. Locally, run `./gradlew :app:detekt` on demand.
+detekt {
+    config.setFrom(rootProject.file("detekt.yml"))
+    parallel = true
+    buildUponDefaultConfig = true
 }
 
 dependencies {
