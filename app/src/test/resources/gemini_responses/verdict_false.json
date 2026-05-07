@@ -1,0 +1,19 @@
+{
+  "verdictLabel": "FALSE",
+  "headline": "The Great Wall of China is NOT visible from the Moon with the naked eye.",
+  "contextLines": [
+    "NASA and Chinese astronaut Yang Liwei have both publicly debunked this myth.",
+    "The Wall's average width is too narrow to be resolved from lunar distance."
+  ],
+  "sources": [
+    {
+      "title": "China's first astronaut: I couldn't see the Great Wall from space",
+      "url": "https://www.bbc.com/news/world-asia-china-22305537",
+      "publisher": "BBC News",
+      "dateYearMonth": "2013-05"
+    }
+  ],
+  "ocrText": "Did you know? You can see the Great Wall of China from the Moon.",
+  "regionalBiasNote": null,
+  "injectionDetected": false
+}

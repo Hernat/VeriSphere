@@ -1,0 +1,25 @@
+{
+  "verdictLabel": "DOUBTFUL",
+  "headline": "Election turnout figures vary by source and political alignment.",
+  "contextLines": [
+    "Official electoral commission figures differ from opposition-party estimates.",
+    "International observers cite irregularities in some districts."
+  ],
+  "sources": [
+    {
+      "title": "Election results — official press release",
+      "url": "https://example.gov/election-results",
+      "publisher": "Electoral Commission",
+      "dateYearMonth": "2024-11"
+    },
+    {
+      "title": "Opposition disputes turnout figures",
+      "url": "https://example.com/opposition-statement",
+      "publisher": "Reuters",
+      "dateYearMonth": "2024-11"
+    }
+  ],
+  "ocrText": "Turnout reached 78% according to the electoral commission.",
+  "regionalBiasNote": "Reporting on this election varies significantly between state-aligned and independent outlets.",
+  "injectionDetected": false
+}

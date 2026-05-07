@@ -1,0 +1,20 @@
+{
+  "verdictLabel": "DOUBTFUL",
+  "headline": "Coffee causes cancer — single source, contested by other research.",
+  "contextLines": [
+    "One observational study correlates heavy consumption with bladder cancer.",
+    "Multiple meta-analyses found no causal link.",
+    "Insufficient corroboration for a TRUE verdict."
+  ],
+  "sources": [
+    {
+      "title": "Coffee and cancer risk: a single study",
+      "url": "https://example.com/single-study",
+      "publisher": "Some Journal",
+      "dateYearMonth": "2018-03"
+    }
+  ],
+  "ocrText": "Drinking coffee causes cancer.",
+  "regionalBiasNote": null,
+  "injectionDetected": false
+}

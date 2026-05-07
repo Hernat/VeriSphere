@@ -1,0 +1,9 @@
+{
+  "verdictLabel": "NON_VERIFIABLE",
+  "headline": "No factual claim detected in the captured screen.",
+  "contextLines": [],
+  "sources": [],
+  "ocrText": "Welcome to Notes\nNew note",
+  "regionalBiasNote": null,
+  "injectionDetected": false
+}

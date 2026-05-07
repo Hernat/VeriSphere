@@ -186,6 +186,21 @@ class BubbleOverlayService :
                     ?: throw VeriSphereAccessibilityService.ServiceUnboundException()
                 service.captureScreenshot()
             },
+            // Story 1.9: real Gemini call replaces Story 1.8's simulated
+            // 200 ms delay + synthetic verdict. GeminiClient.verify is
+            // the single boundary to generativelanguage.googleapis.com
+            // (architecture line 752) and never throws (architecture
+            // line 487 — single error funnel).
+            //
+            // Code-review patch P9 — deferring lambda (NOT a method
+            // reference). `container.geminiClient::verify` would force
+            // the `geminiClient` lazy + `httpClient` lazy + asset read
+            // (patch P14) on the main thread inside onCreate, eating into
+            // the FGS deadline. The lambda below defers the lazy chain
+            // until first capture — and the first invocation lands inside
+            // CapturePipeline's `Dispatchers.IO` context, so the asset
+            // read happens on IO (architecture line 473).
+            verify = { frame -> container.geminiClient.verify(frame) },
         )
 
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)

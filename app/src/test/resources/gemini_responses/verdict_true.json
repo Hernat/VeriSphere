@@ -1,0 +1,26 @@
+{
+  "verdictLabel": "TRUE",
+  "headline": "The Eiffel Tower is located in Paris, France.",
+  "contextLines": [
+    "Constructed 1887-1889 for the 1889 World's Fair.",
+    "Located on the Champ de Mars in the 7th arrondissement of Paris.",
+    "One of the most recognised structures in the world."
+  ],
+  "sources": [
+    {
+      "title": "Eiffel Tower",
+      "url": "https://en.wikipedia.org/wiki/Eiffel_Tower",
+      "publisher": "Wikipedia",
+      "dateYearMonth": "2024-08"
+    },
+    {
+      "title": "The Eiffel Tower: a brief history",
+      "url": "https://www.toureiffel.paris/en/the-monument/history",
+      "publisher": "Société d'Exploitation de la Tour Eiffel",
+      "dateYearMonth": "2023-11"
+    }
+  ],
+  "ocrText": "The Eiffel Tower is in Paris.",
+  "regionalBiasNote": null,
+  "injectionDetected": false
+}
