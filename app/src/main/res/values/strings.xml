@@ -12,4 +12,7 @@
     <string name="permission_allow_overlay">Allow overlay</string>
     <string name="permission_exit">Exit</string>
     <string name="permission_settings_unavailable">This device does not expose the overlay-permission screen. Please enable \"Display over other apps\" for VeriSphere from your system settings.</string>
+
+    <!-- Story 1.7 — BubbleOverlay idle composable accessibility (UX-DR5, NFR12, UX-DR18) -->
+    <string name="bubble_idle_content_description">VeriSphere bubble, idle</string>
 </resources>

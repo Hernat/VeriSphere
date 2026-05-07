@@ -17,6 +17,7 @@ kotlinxSerialization = "1.7.3"            # D3.2 — Kotlin 2.0.21 compatible
 securityCrypto = "1.1.0"                  # D1.6 — MasterKey.Builder (AES-256-GCM, non-extractable). Bumped alpha06 → 1.1.0 GA in Story 1.4 (Maven check 2026-05-06).
 lifecycleViewmodelCompose = "2.6.1"       # D4.2 — aligned with lifecycle-runtime-ktx 2.6.1
 turbine = "1.1.0"                         # Test helper for Flow/StateFlow assertions
+kotlinxCoroutinesTest = "1.8.1"           # Story 1.7 — virtual time for BubbleStateMachine fade-timer tests; Kotlin 2.0.21-compatible
 
 # Added by Story 1.3 — static analysis (architecture pattern enforcement, lines 525–528)
 detekt = "1.23.7"                         # AR11 — latest stable 1.23.x; supports Kotlin 2.0.x
@@ -44,6 +45,7 @@ androidx-security-crypto = { group = "androidx.security", name = "security-crypt
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutinesTest" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
