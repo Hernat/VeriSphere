@@ -103,6 +103,13 @@ class BubbleStateMachine(
             // a previous Idle period must not flip a Pressing / Verdict /
             // Failure state into faded-Idle.
             (current as? BubbleState.Idle)?.copy(faded = true) ?: current
+        BubbleEvent.LongPressCompleted ->
+            // Story 1.8: long-press is a SIGNAL (the service starts the
+            // CapturePipeline directly) — not a state transition. The bubble
+            // stays in Idle while the simulated capture runs in the
+            // background. Story 1.10 will introduce `Pressing` / `Capturing`
+            // and replace this branch with the real transition.
+            current
     }
 
     companion object {

@@ -18,6 +18,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.Lifecycle
@@ -32,9 +33,13 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.verisphere.app.AppContainer
+import com.verisphere.app.MainActivity
 import com.verisphere.app.R
 import com.verisphere.app.VeriSphereApplication
+import com.verisphere.app.accessibility.VeriSphereAccessibilityService
 import com.verisphere.app.bubble.ui.BubbleOverlay
+import com.verisphere.app.capture.CapturePipeline
+import com.verisphere.app.gemini.VerificationOutcome
 import com.verisphere.app.ui.theme.VeriSphereTheme
 import com.verisphere.app.util.tag
 import kotlinx.coroutines.CoroutineScope
@@ -43,6 +48,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 /**
@@ -68,8 +74,21 @@ import kotlin.math.roundToInt
  * runs the 5 s inactivity timer. Position is persisted via
  * [container.secureStorage] under [KEY_BUBBLE_X] / [KEY_BUBBLE_Y].
  *
- * Story 1.8 will add the `MEDIA_PROJECTION` token holder and dynamic FGS
- * type switching (D5.2).
+ * Story 1.8.5 (Sprint Change 2026-05-07) routes captures through
+ * [VeriSphereAccessibilityService] (architecture D5.13, AR27) instead
+ * of `MEDIA_PROJECTION` (D5.3 deprecated, AR22 deprecated). The bubble
+ * service no longer holds any capture token — it just triggers the
+ * pipeline on long-press, and the pipeline reads the active accessibility
+ * service via `VeriSphereAccessibilityService.instance` (a `@Volatile`
+ * static reference set in `onServiceConnected`). The foreground-service
+ * type stays at `specialUse` for the entire service lifetime — no
+ * runtime promote/demote dance any more (D5.2 amended).
+ *
+ * On long-press the service either (a) starts the capture pipeline
+ * directly if [VeriSphereAccessibilityService.instance] is non-null, or
+ * (b) routes the user back to [MainActivity] (which renders
+ * [com.verisphere.app.ui.onboarding.AccessibilityExplanationScreen]) so
+ * they can activate the accessibility service in Settings.
  *
  * Threading: `onCreate`, `onStartCommand`, `onDestroy` run on the main
  * thread. Lifecycle event dispatch must therefore happen on the main
@@ -95,8 +114,10 @@ class BubbleOverlayService :
     private lateinit var params: WindowManager.LayoutParams
     private lateinit var container: AppContainer
     private lateinit var bubbleStateMachine: BubbleStateMachine
+    private lateinit var capturePipeline: CapturePipeline
     private var overlayAttached: Boolean = false
     private var snapJob: Job? = null
+    private var captureJob: Job? = null
 
     // Drag-rounding accumulators (Story 1.7 review fix #4): per-frame
     // dxPx / dyPx are floats; rounding each independently to Int truncates
@@ -144,6 +165,29 @@ class BubbleOverlayService :
         container = (application as VeriSphereApplication).container
         bubbleStateMachine = BubbleStateMachine(coroutineScope = serviceScope)
 
+        // Story 1.8.5 (Sprint Change 2026-05-07): pipeline reads the
+        // active VeriSphereAccessibilityService via its @Volatile static
+        // instance. The lambda-provider design (Story 1.8 review patch
+        // P5 retained) makes this swap mechanical — no MediaProjection
+        // token holder needed any more.
+        //
+        // Code-review patch P4: throw a typed ServiceUnboundException
+        // (instead of generic `error(...)` which produces an
+        // IllegalStateException) so the pipeline's single error funnel
+        // can specifically map it to Failure.PermissionDenied — covers
+        // the TOCTOU window between `hasToken()` returning true and
+        // `frameExtractor()` being invoked (user disables accessibility
+        // mid-capture).
+        capturePipeline = CapturePipeline(
+            rateLimitRepository = container.rateLimitRepository,
+            hasToken = { VeriSphereAccessibilityService.instance != null },
+            frameExtractor = {
+                val service = VeriSphereAccessibilityService.instance
+                    ?: throw VeriSphereAccessibilityService.ServiceUnboundException()
+                service.captureScreenshot()
+            },
+        )
+
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
 
         windowManager = getSystemService(WindowManager::class.java)
@@ -167,6 +211,14 @@ class BubbleOverlayService :
             lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
             lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         }
+
+        // Story 1.8.5 (Sprint Change 2026-05-07): no more
+        // ACTION_DELIVER_TOKEN branch — the MediaProjection Intent dance
+        // was deleted. The service no longer needs to receive token
+        // deliveries because the AccessibilityService owns its own
+        // permission lifecycle (granted via Settings, persistent across
+        // reboots).
+
         // START_STICKY: Android auto-restarts the service after process
         // death (NFR15). The intent is null on restart — that is fine,
         // the bubble has no per-start parameters in V1.
@@ -190,6 +242,9 @@ class BubbleOverlayService :
         if (::bubbleStateMachine.isInitialized) {
             bubbleStateMachine.dispose()
         }
+        // Story 1.8.5: no MediaProjection token to release — the
+        // VeriSphereAccessibilityService owns its own lifecycle via
+        // Settings (D5.13). The bubble service tear-down is now leaner.
         if (lifecycleRegistry.currentState.isAtLeast(Lifecycle.State.STARTED)) {
             lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         }
@@ -325,6 +380,7 @@ class BubbleOverlayService :
                         onUserActivity = ::onBubbleUserActivity,
                         onTap = ::onBubbleTap,
                         onTapNearMiss = ::onBubbleTapNearMiss,
+                        onLongPress = ::onBubbleLongPress,
                         onDragDelta = ::onBubbleDragDelta,
                         onDragEnd = ::onBubbleDragEnd,
                     )
@@ -427,6 +483,69 @@ class BubbleOverlayService :
         // Intentionally empty — see KDoc.
     }
 
+    /**
+     * Story 1.8 — long-press handler. Dispatches the forward-compat
+     * [BubbleEvent.LongPressCompleted] (no state change in 1.8; Story
+     * 1.10 will introduce the `Pressing` / `Capturing` transition) and
+     * either starts the capture pipeline directly (when the
+     * [VeriSphereAccessibilityService] is bound) or routes the user back
+     * to [MainActivity] so they can activate the accessibility service
+     * in Settings.
+     *
+     * Re-entrancy: if a previous capture job is still running we drop
+     * the new long-press silently (Story 1.10 will introduce a
+     * `Thinking` state to make this visible).
+     */
+    private fun onBubbleLongPress() {
+        bubbleStateMachine.onEvent(BubbleEvent.LongPressCompleted)
+
+        if (captureJob?.isActive == true) {
+            Log.d(TAG, "long-press ignored — previous capture still running")
+            return
+        }
+
+        if (VeriSphereAccessibilityService.instance == null) {
+            Log.d(TAG, "long-press without accessibility service — routing to MainActivity")
+            launchAccessibilityExplanationActivity()
+        } else {
+            launchCaptureJob()
+        }
+    }
+
+    private fun launchAccessibilityExplanationActivity() {
+        val intent = Intent(this, MainActivity::class.java)
+            .setAction(MainActivity.ACTION_REQUEST_ACCESSIBILITY)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        startActivity(intent)
+    }
+
+    private fun launchCaptureJob() {
+        captureJob = serviceScope.launch {
+            runCaptureAndDispatch()
+        }
+    }
+
+    /**
+     * Run the capture pipeline. Story 1.8.5 simplification: no more
+     * runtime FGS-type promote/demote dance — the service stays at
+     * `specialUse` for its entire lifetime because the capture API
+     * (AccessibilityService.takeScreenshot, D5.13) does not require
+     * `FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION` like the deprecated
+     * MediaProjection path did (D5.3 deprecated). Story 1.10 will
+     * dispatch `BubbleEvent.VerificationOutcomeReceived(outcome)` so
+     * the bubble visually reflects the result.
+     */
+    private suspend fun runCaptureAndDispatch() {
+        val outcome = capturePipeline.runCapture()
+        Log.d(TAG, "capture outcome: ${outcome.logLabel()}")
+        // Story 1.10 will route the outcome into the state machine.
+    }
+
+    private fun VerificationOutcome.logLabel(): String = when (this) {
+        is VerificationOutcome.Verdict -> "Verdict(id=${record.id})"
+        is VerificationOutcome.Failure -> this::class.simpleName ?: "Failure"
+    }
+
     private fun onBubbleDragDelta(dxPx: Float, dyPx: Float) {
         // A new drag pre-empts any in-flight edge-snap from a previous
         // gesture so the bubble stays under the user's finger instead
@@ -504,7 +623,20 @@ class BubbleOverlayService :
             // animateSnapToX throws CancellationException and persist
             // never runs.
             try {
-                animateSnapToX(targetX.toFloat())
+                // AndroidUiDispatcher.Main provides a MonotonicFrameClock
+                // driven by Choreographer — required by Compose's
+                // Animatable.animateTo. serviceScope's Dispatchers.Main.immediate
+                // does NOT carry a MonotonicFrameClock (Activity-side Compose
+                // gets it for free via the Recomposer; a non-Activity Service
+                // host must opt in explicitly). Without this withContext,
+                // every drag-end crashes with "A MonotonicFrameClock is not
+                // available in this CoroutineContext" — surfaced for the
+                // first time during Story 1.8's manual smoke test on the AVD
+                // (Story 1.7's connectedDebugAndroidTest gate had not been
+                // run on real hardware).
+                withContext(AndroidUiDispatcher.Main) {
+                    animateSnapToX(targetX.toFloat())
+                }
             } finally {
                 persistPosition()
             }
@@ -566,6 +698,13 @@ class BubbleOverlayService :
     }
 
     private companion object {
+        // Story 1.8.5 (Sprint Change 2026-05-07): the public Intent
+        // action / extra constants from Story 1.8 (ACTION_REQUEST_TOKEN,
+        // ACTION_DELIVER_TOKEN, EXTRA_RESULT_CODE, EXTRA_RESULT_DATA)
+        // are deleted — the MediaProjection Intent dance is gone.
+        // companion object reverted to private since no external caller
+        // needs its constants.
+
         private val TAG = tag("BubbleOverlayService")
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "vs_bubble_channel"

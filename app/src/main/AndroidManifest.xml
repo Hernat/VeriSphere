@@ -3,11 +3,24 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-      VeriSphere permissions (NFR10).
+      VeriSphere permissions (NFR10, architecture D2.6).
+
+      Story 1.8.5 (Sprint Change 2026-05-07): switched capture API
+      from MEDIA_PROJECTION (D5.3 deprecated) to AccessibilityService.
+      takeScreenshot (D5.13). Removed FOREGROUND_SERVICE_MEDIA_PROJECTION
+      since the bubble service no longer holds a MediaProjection token.
+      Added BIND_ACCESSIBILITY_SERVICE — declared on the
+      VeriSphereAccessibilityService <service> element below (system
+      enforcement; not a regular <uses-permission>).
+
       Do NOT add any other permission without an architecture amendment.
+      Architecture D2.6 (amended Sprint Change 2026-05-07) enumerates 6
+      permissions / declarations: 5 listed below as <uses-permission>,
+      plus BIND_ACCESSIBILITY_SERVICE declared on the
+      VeriSphereAccessibilityService <service> element below (system
+      enforcement, not as <uses-permission>).
         - SYSTEM_ALERT_WINDOW          : floating bubble overlay (D4.10).
         - FOREGROUND_SERVICE           : keep the bubble alive across apps.
-        - FOREGROUND_SERVICE_MEDIA_PROJECTION : screen capture (Android 14+).
         - FOREGROUND_SERVICE_SPECIAL_USE : per-FGS-type permission required
                                           since Android 14 (API 34) for the
                                           'specialUse' foreground service
@@ -15,21 +28,19 @@
                                           (Story 1.6, D5.2). Without this,
                                           startForeground silently fails to
                                           promote the service and the 5s
-                                          deadline check fires
-                                          (ForegroundServiceDidNotStartInTimeException).
-                                          Architecture amendment to D2.6 / NFR10:
-                                          original 5-permission list missed
-                                          this Android 14+ requirement.
+                                          deadline check fires.
         - INTERNET                     : Gemini API + version-info fetch.
         - POST_NOTIFICATIONS           : runtime-requested on API 33+ for the
                                           foreground-service notification.
-                                          On API < 33 the permission is
-                                          silently ignored (no-op) — the
-                                          notification posts unconditionally.
+        - BIND_ACCESSIBILITY_SERVICE   : declared on the
+                                          VeriSphereAccessibilityService
+                                          <service> element below (D5.13,
+                                          AR27, D2.11). Required by the
+                                          system for accessibility-service
+                                          binding; not a <uses-permission>.
     -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -48,6 +59,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.VeriSphere">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -59,10 +71,12 @@
           BubbleOverlayService — foreground service hosting the
           WindowManager overlay window (Story 1.6, AR19, AR20, D4.10).
 
-          foregroundServiceType="specialUse" only in this story.
-          mediaProjection is added DYNAMICALLY at runtime in Story 1.8
-          via Service.setForegroundServiceType(SPECIAL_USE | MEDIA_PROJECTION)
-          when the MP token is acquired (D5.2 — "dynamic switching").
+          foregroundServiceType="specialUse" — Story 1.8.5 (Sprint Change
+          2026-05-07) reverted the dynamic mediaProjection switching
+          because the capture API moved off MediaProjection entirely
+          (D5.3 deprecated → D5.13 AccessibilityService.takeScreenshot).
+          The bubble service now stays at specialUse for its entire
+          lifetime — no runtime promote/demote dance.
 
           The <property> declares the special-use subtype required by
           Google Play policy for the specialUse FGS type. We are not on
@@ -76,6 +90,36 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="persistent_floating_bubble_for_on_demand_ai_verification" />
+        </service>
+
+        <!--
+          VeriSphereAccessibilityService — Story 1.8.5 (architecture
+          AR27, D5.13, D2.11). User activates this service once via
+          Settings → Accessibility → VeriSphere → On (deep-linked from
+          AccessibilityExplanationScreen / Story 5.1 onboarding card 1).
+
+          android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+          is mandatory — the system enforces it before binding the
+          service. Without it, the service refuses to bind.
+
+          android:exported="false" — only the system can bind via the
+          AccessibilityService action, not other apps.
+
+          The <meta-data> points to res/xml/accessibility_service_config.xml
+          which declares canTakeScreenshot="true" (load-bearing for the
+          API 30+ takeScreenshot capability).
+        -->
+        <service
+            android:name=".accessibility.VeriSphereAccessibilityService"
+            android:exported="false"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
         </service>
 
     </application>

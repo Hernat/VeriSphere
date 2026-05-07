@@ -15,4 +15,13 @@
 
     <!-- Story 1.7 — BubbleOverlay idle composable accessibility (UX-DR5, NFR12, UX-DR18) -->
     <string name="bubble_idle_content_description">VeriSphere bubble, idle</string>
+
+    <!-- Story 1.8.5 — VeriSphereAccessibilityService (architecture D5.13, AR27, D2.11; UX-DR17 warm-tone copy) -->
+    <string name="accessibility_service_label">VeriSphere</string>
+    <string name="accessibility_service_description">VeriSphere capture l\'écran que tu vérifies par long-press. Pas de lecture en arrière-plan, pas d\'actions automatiques. Désactivable à tout moment dans Settings.</string>
+    <string name="accessibility_service_summary">Capture d\'écran silencieuse pour le fact-checking</string>
+    <string name="accessibility_explanation_title">Activer l\'accessibilité</string>
+    <string name="accessibility_explanation_body">VeriSphere lit l\'écran que tu vérifies — rien d\'autre. Pas de lecture en arrière-plan. Pas d\'actions automatiques. Désactivable à tout moment dans Settings.</string>
+    <string name="accessibility_action_activate">Activer</string>
+    <string name="accessibility_settings_unavailable">Cet appareil n\'expose pas l\'écran des permissions d\'accessibilité. Active VeriSphere via les Settings système.</string>
 </resources>

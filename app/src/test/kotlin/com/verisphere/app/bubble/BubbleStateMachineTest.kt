@@ -157,14 +157,64 @@ class BubbleStateMachineTest {
      * `(current as? BubbleState.Idle)?.copy(faded = true) ?: current`
      * guard. Story 1.7 only ships [BubbleState.Idle], so we cannot
      * exercise the non-Idle branch with the public API. Stays @Ignored
-     * until Story 1.8 introduces `Pressing` / `Capturing` / `Thinking`
-     * variants that allow constructing a non-Idle initial state.
+     * until Story 1.10 introduces `Pressing` / `Capturing` / `Thinking`
+     * variants that allow constructing a non-Idle initial state — Story
+     * 1.8 only adds a no-op forward-compat event, not new states.
      */
     @Test
-    @Ignore("Forward-compat guard — non-Idle states arrive in Story 1.8.")
+    @Ignore("Forward-compat guard — non-Idle states arrive in Story 1.10.")
     fun `AutoFadeTimeout when not Idle is a no-op`() {
-        // TODO Story 1.8: when BubbleState gains a Pressing variant, this
+        // TODO Story 1.10: when BubbleState gains a Pressing variant, this
         // test should construct `BubbleStateMachine(initial = Pressing, ...)`,
         // fire AutoFadeTimeout, and assert state is still Pressing.
+    }
+
+    /**
+     * Story 1.8 — `LongPressCompleted` is a forward-compat signal: the
+     * service consumes it to start the [com.verisphere.app.capture.CapturePipeline],
+     * but the bubble's visible state stays in Idle. The reducer's branch
+     * (`current` — no transition) is the wire that future stories (1.10)
+     * will replace with the real `Idle → Pressing → Capturing` transition.
+     */
+    @Test
+    fun `LongPressCompleted is a no-op on Idle in story 1_8`() = runTest {
+        val sm = BubbleStateMachine(
+            coroutineScope = TestScope(StandardTestDispatcher(testScheduler)),
+        )
+
+        sm.onEvent(BubbleEvent.LongPressCompleted)
+        runCurrent()
+
+        assertEquals(BubbleState.Idle(faded = false), sm.state.value)
+    }
+
+    /**
+     * Story 1.8 — `LongPressCompleted` MUST NOT cancel or restart the
+     * inactivity fade timer. A previous touch-down has already emitted
+     * `UserActivity` (covering the timer reset); the long-press event
+     * itself is purely a capture signal.
+     */
+    @Test
+    fun `LongPressCompleted does not affect the running fade timer`() = runTest {
+        val sm = BubbleStateMachine(
+            coroutineScope = TestScope(StandardTestDispatcher(testScheduler)),
+        )
+
+        // Touch-down arms the 5 s timer.
+        sm.onEvent(BubbleEvent.UserActivity)
+        runCurrent()
+
+        // 1 s into the hold the user has crossed the long-press threshold.
+        advanceTimeBy(1_000)
+        runCurrent()
+        sm.onEvent(BubbleEvent.LongPressCompleted)
+        runCurrent()
+
+        // Another 4 s elapse — total 5 s since UserActivity. The timer
+        // must still fire because LongPressCompleted did NOT touch it.
+        advanceTimeBy(4_000)
+        advanceUntilIdle()
+
+        assertEquals(BubbleState.Idle(faded = true), sm.state.value)
     }
 }

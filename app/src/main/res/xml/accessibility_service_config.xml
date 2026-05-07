@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VeriSphereAccessibilityService configuration (Story 1.8.5,
+  architecture D5.13 + AR27 + D2.11).
+
+  canTakeScreenshot="true" — load-bearing attribute; enables
+    AccessibilityService.takeScreenshot() (API 30+).
+
+  accessibilityEventTypes="typeWindowStateChanged" — intentionally
+    NOT empty even though VeriSphere never consumes events. Empty
+    accessibilityEventTypes causes unreliable service binding on
+    Samsung One UI / Xiaomi MIUI / Huawei EMUI (research source:
+    ScreenshotTile open-source impl + community reports). The
+    typeWindowStateChanged event is the universal high-frequency
+    event that all Android devices generate; the system unconditionally
+    binds the service to deliver it. VeriSphere's onAccessibilityEvent
+    is a no-op so the events are dropped immediately — ~zero CPU cost.
+
+  accessibilityFlags="" — no behaviour flags requested. We don't need
+    flagRetrieveInteractiveWindows, flagReportViewIds, etc. Minimum-
+    permission posture (D2.11).
+
+  notificationTimeout="100" — minimum reasonable value. Lower bound is
+    documented per Android source. Has no behavioural impact for our
+    no-op listener.
+
+  description / summary — surfaced in Settings → Accessibility →
+    VeriSphere. The user reads these to understand what the service
+    does. Warm-tone copy per UX-DR17 (no exclamation marks, no "Oops").
+-->
+<accessibility-service
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags=""
+    android:canTakeScreenshot="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:summary="@string/accessibility_service_summary" />

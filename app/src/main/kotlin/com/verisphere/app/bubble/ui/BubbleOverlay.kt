@@ -35,6 +35,7 @@ import com.verisphere.app.R
 import com.verisphere.app.bubble.BubbleState
 import com.verisphere.app.ui.theme.VeriSphereTheme
 import kotlin.math.hypot
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The persistent floating bubble's idle composable (UX-DR5, UX-DR4,
@@ -66,16 +67,24 @@ import kotlin.math.hypot
  *     off bubble). Functionally equivalent to [onUserActivity] in 1.7;
  *     kept distinct for future stories that may treat near-miss
  *     specifically.
+ *   - [onLongPress] fires AT the 1 s mark while the finger is still down
+ *     on the visible 56 dp bubble (PRD FR3, UX-DR5, UX-DR14). Triggers
+ *     the silent `AccessibilityService.takeScreenshot()` capture path
+ *     (Story 1.8.5, architecture D5.13; previously `MEDIA_PROJECTION`
+ *     in Story 1.8 — superseded). Fires at most once per gesture;
+ *     subsequent finger movement / release does NOT re-fire.
  *   - [onDragDelta] fires on every drag tick once the gesture has been
  *     promoted to drag mode (motion > 4 dp on bubble).
  *   - [onDragEnd] fires when the dragging pointer goes up.
  *
  * Gesture pass: a single [awaitEachGesture] block disambiguates
- * tap / drag / tap-near-miss using motion ≤ 4 dp + elapsed < 200 ms for
- * tap, motion > 4 dp on the bubble for drag, and motion ≤ 4 dp off the
- * bubble for near-miss. Long-press is silently dropped in this story
- * (Story 1.8 wires it). Multi-touch: the gesture tracks a single pointer
- * by id (the one that landed first); secondary fingers are ignored.
+ * tap / drag / tap-near-miss / long-press. The detection of the 1 s
+ * long-press uses [withTimeoutOrNull] around [awaitPointerEvent] so the
+ * deadline fires while the user is holding the bubble (no further pointer
+ * events arrive during a still hold; a passive `if elapsed >= LONG_PRESS_MS`
+ * inside the loop would never run). Multi-touch: the gesture tracks a
+ * single pointer by id (the one that landed first); secondary fingers
+ * are ignored.
  */
 @Composable
 fun BubbleOverlay(
@@ -83,6 +92,7 @@ fun BubbleOverlay(
     onUserActivity: () -> Unit,
     onTap: () -> Unit,
     onTapNearMiss: () -> Unit,
+    onLongPress: () -> Unit,
     onDragDelta: (dxPx: Float, dyPx: Float) -> Unit,
     onDragEnd: () -> Unit,
     modifier: Modifier = Modifier,
@@ -111,6 +121,7 @@ fun BubbleOverlay(
                         onUserActivity = onUserActivity,
                         onTap = onTap,
                         onTapNearMiss = onTapNearMiss,
+                        onLongPress = onLongPress,
                         onDragDelta = onDragDelta,
                         onDragEnd = onDragEnd,
                     )
@@ -155,20 +166,30 @@ fun BubbleOverlay(
  *   2. Track cumulative drag distance using a single pointer ID — only
  *      the pointer that landed first counts. Secondary fingers are
  *      ignored.
- *   3. As soon as cumulative motion exceeds the 4 dp threshold AND the
+ *   3. While the deadline is in the future and the long-press has not
+ *      yet fired, await pointer events under [withTimeoutOrNull] so the
+ *      1 s deadline fires WHILE THE FINGER IS HELD (no further events
+ *      arrive during a still hold; passive `if elapsed >= 1 s` inside
+ *      the loop would never run).
+ *   4. As soon as cumulative motion exceeds the 4 dp threshold AND the
  *      down was on the bubble, promote to drag mode and emit deltas.
- *   4. On pointer up:
+ *      Drag mode also disables further long-press detection (a hand
+ *      that's moving is a drag, not a press).
+ *   5. On pointer up:
  *      - drag mode → [onDragEnd].
+ *      - long-press already fired → silent (no [onTap] double-fire).
  *      - no drag, on bubble, elapsed < 200 ms → [onTap].
  *      - no drag, off bubble (halo) → [onTapNearMiss].
- *      - else (long-press shape — on bubble, elapsed ≥ 200 ms, no drag)
- *        → silently drop. Story 1.8 wires long-press.
+ *      - else (long-press shape that didn't reach 1 s — e.g. release at
+ *        500 ms with no motion) → silently drop.
  */
+@Suppress("LongMethod", "CyclomaticComplexMethod") // single linear gesture loop — extracting helpers fragments the state machine across functions
 private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.handleGesture(
     density: Density,
     onUserActivity: () -> Unit,
     onTap: () -> Unit,
     onTapNearMiss: () -> Unit,
+    onLongPress: () -> Unit,
     onDragDelta: (Float, Float) -> Unit,
     onDragEnd: () -> Unit,
 ) {
@@ -184,6 +205,7 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.han
         haloCentrePx = haloCentrePx,
         bubbleRadiusPx = bubbleRadiusPx,
     )
+    val longPressDeadlineMs = downTime + LONG_PRESS_MS
 
     // Touch-down is itself user activity — the service resets the fade
     // timer here so that long-press releases (which emit no other
@@ -194,9 +216,52 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.han
     var totalDragPx = 0f
     var inDragMode = false
     var lastPosition = down.position
+    var longPressFired = false
 
     while (true) {
-        val event = awaitPointerEvent()
+        // Passive elapsed check (Story 1.8.5 code-review patch P10
+        // robustness): fire the long-press if 1 s has elapsed since
+        // touch-down, REGARDLESS of whether the timeout below was
+        // about to fire. This covers two cases the timeout-only path
+        // misses: (a) synthetic gestures from instrumented tests that
+        // inject MOVE events every ~5 ms (defeating the `withTimeoutOrNull`),
+        // (b) real users whose finger pressure jitters generate
+        // redundant pointer events at the same position. Real users
+        // who hold perfectly still still trigger the timeout below;
+        // this passive check is additive, not a replacement.
+        if (
+            !longPressFired && !inDragMode &&
+            downOnBubble && totalDragPx <= dragThresholdPx &&
+            SystemClock.uptimeMillis() - downTime >= LONG_PRESS_MS
+        ) {
+            longPressFired = true
+            onLongPress()
+        }
+
+        // Compute the per-iteration timeout: the time remaining until
+        // the 1 s long-press deadline. Once the long-press has fired
+        // (or the gesture became a drag), we fall back to an indefinite
+        // awaitPointerEvent — no more deadline to chase.
+        val remainingMs = longPressDeadlineMs - SystemClock.uptimeMillis()
+        val event = if (!longPressFired && !inDragMode && remainingMs > 0L) {
+            withTimeoutOrNull(remainingMs) { awaitPointerEvent() }
+        } else {
+            awaitPointerEvent()
+        }
+
+        if (event == null) {
+            // The long-press deadline elapsed while the finger is still
+            // down with no events arriving. Promote to long-press if
+            // the gesture shape qualifies (on the visible bubble, no
+            // significant motion). Halo holds and on-bubble holds that
+            // have already drifted past 4 dp do NOT promote.
+            if (downOnBubble && totalDragPx <= dragThresholdPx) {
+                longPressFired = true
+                onLongPress()
+            }
+            continue
+        }
+
         // Track only the pointer that landed first. If it's no longer
         // in the changes list (system cancelled, or a different pointer
         // is producing events while ours is gone), terminate the gesture.
@@ -208,6 +273,7 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.han
                 downOnBubble = downOnBubble,
                 totalDragPx = totalDragPx,
                 dragThresholdPx = dragThresholdPx,
+                longPressFired = longPressFired,
                 elapsedMs = SystemClock.uptimeMillis() - downTime,
                 onTap = onTap,
                 onTapNearMiss = onTapNearMiss,
@@ -237,6 +303,7 @@ private fun handlePointerUp(
     downOnBubble: Boolean,
     totalDragPx: Float,
     dragThresholdPx: Float,
+    longPressFired: Boolean,
     elapsedMs: Long,
     onTap: () -> Unit,
     onTapNearMiss: () -> Unit,
@@ -244,6 +311,10 @@ private fun handlePointerUp(
 ) {
     when {
         inDragMode -> onDragEnd()
+        // Long-press already fired during the hold — releasing the finger
+        // afterwards is just a silent end-of-gesture. Do NOT also fire
+        // onTap (which would request a second capture for the same press).
+        longPressFired -> Unit
         totalDragPx > dragThresholdPx -> Unit
         downOnBubble && elapsedMs < TAP_TIMEOUT_MS -> onTap()
         !downOnBubble -> onTapNearMiss()
@@ -276,6 +347,13 @@ private const val FADE_DURATION_MS = 300
 private const val DRAG_THRESHOLD_DP = 4
 private const val TAP_TIMEOUT_MS = 200L
 
+// Long-press duration (PRD FR3 — "≈ 1 second", UX-DR5). Detection happens
+// AT this mark while the finger is still down; releasing earlier silently
+// drops the gesture (no event emitted). UX-DR14 routes `Idle × Long-press`
+// to the silent `AccessibilityService.takeScreenshot()` capture path
+// (Story 1.8.5, architecture D5.13 — superseded MEDIA_PROJECTION from Story 1.8).
+private const val LONG_PRESS_MS = 1_000L
+
 private const val OPAQUE_ALPHA = 1.0f
 private const val FADED_ALPHA = 0.4f
 
@@ -288,6 +366,7 @@ private fun BubbleOverlayIdleOpaqueLightPreview() {
             onUserActivity = {},
             onTap = {},
             onTapNearMiss = {},
+            onLongPress = {},
             onDragDelta = { _, _ -> },
             onDragEnd = {},
         )
@@ -307,6 +386,7 @@ private fun BubbleOverlayIdleOpaqueDarkPreview() {
             onUserActivity = {},
             onTap = {},
             onTapNearMiss = {},
+            onLongPress = {},
             onDragDelta = { _, _ -> },
             onDragEnd = {},
         )
@@ -322,6 +402,7 @@ private fun BubbleOverlayIdleFadedLightPreview() {
             onUserActivity = {},
             onTap = {},
             onTapNearMiss = {},
+            onLongPress = {},
             onDragDelta = { _, _ -> },
             onDragEnd = {},
         )
@@ -341,6 +422,7 @@ private fun BubbleOverlayIdleFadedDarkPreview() {
             onUserActivity = {},
             onTap = {},
             onTapNearMiss = {},
+            onLongPress = {},
             onDragDelta = { _, _ -> },
             onDragEnd = {},
         )

@@ -90,7 +90,12 @@ android {
 
     defaultConfig {
         applicationId = "com.verisphere.app"
-        minSdk = 26
+        // Story 1.8.5 — Sprint Change 2026-05-07: bumped from 26 to 30
+        // because AccessibilityService.takeScreenshot() (architecture
+        // D5.13) requires API 30 (Android 11). ~10-15 % of Android
+        // devices on 8/9/10 are deferred to V2 if user demand surfaces
+        // (deferred-work.md tracks).
+        minSdk = 30
         targetSdk = 36
         versionCode = resolvedVersionCode
         versionName = resolvedVersionName
@@ -130,6 +135,15 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    // Story 1.8 — unit tests on the JVM stub `android.jar` throw
+    // `RuntimeException` for every Android-platform method (Log.d / w / e
+    // included). Returning default values (no-op for void) lets the
+    // CapturePipeline's logging calls pass through unit tests without
+    // requiring Robolectric. Production code is unchanged.
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 }
 
@@ -176,6 +190,7 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.test.uiautomator)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
