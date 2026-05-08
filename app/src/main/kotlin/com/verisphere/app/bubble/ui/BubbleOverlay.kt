@@ -2,7 +2,11 @@ package com.verisphere.app.bubble.ui
 
 import android.content.res.Configuration
 import android.os.SystemClock
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -14,16 +18,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -33,63 +42,73 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.verisphere.app.R
 import com.verisphere.app.bubble.BubbleState
+import com.verisphere.app.gemini.SourceCitation
+import com.verisphere.app.gemini.VerdictLabel
+import com.verisphere.app.storage.SessionRecord
 import com.verisphere.app.ui.theme.VeriSphereTheme
 import kotlin.math.hypot
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * The persistent floating bubble's idle composable (UX-DR5, UX-DR4,
- * UX-DR18; PRD: FR1, FR2, NFR4, NFR12, NFR13).
+ * The persistent floating bubble — central component of the Story 1.10
+ * happy-path UI (UX-DR5; PRD: FR1, FR2, FR4, FR11, NFR4, NFR12, NFR13).
  *
- * Stateless consumer per architecture lines 762–764: visible alpha is
- * driven by [state] (the only `BubbleState` variant in Story 1.7 is
- * `Idle(faded)`); every gesture surfaces through callback lambdas. The
- * host service owns the `WindowManager.LayoutParams` that drag and
- * edge-snap mutate.
+ * Stateless consumer per architecture lines 762–764: visible
+ * appearance and overlay decoration are driven by [state]; every gesture
+ * surfaces through callback lambdas. The host service owns the
+ * `WindowManager.LayoutParams` and any sibling windows
+ * (e.g. the [FlashTooltip] window in [BubbleState.Verdict]).
  *
- * Why a 104 dp Box around a 56 dp Surface: `FLAG_NOT_TOUCH_MODAL` makes
- * touches outside our window go to the underlying app, so the bubble
- * window itself must be wide enough to capture the 24 dp adaptive-presence
- * halo (UX-DR5 — "tap-near-miss within 24 dp returns alpha to 1.0").
- * The visible bubble stays 56 dp; the surrounding 24 dp halo on each axis
- * intercepts near-miss taps. The trade-off — the underlying app loses
- * 24 dp of touch zone around the bubble — is the documented UX cost of
- * adaptive presence.
+ * **Window scope.** This composable renders inside the 104 dp halo
+ * window owned by [com.verisphere.app.bubble.BubbleOverlayService].
+ * The visible bubble stays 56 dp; the surrounding 24 dp halo on each
+ * axis (a) intercepts near-miss taps for adaptive presence and (b)
+ * provides a 12 dp ring around the visible bubble for the
+ * [SuctionAnimation] (88 dp) and [ThinkingRing] (72 dp) decorations,
+ * both of which fit comfortably within the halo. The [FlashTooltip] is
+ * rendered in a separate WindowManager window — see Critical Dev Note #3
+ * in the story file. Story 1.10 keeps the halo window unchanged.
  *
- * Callback semantics:
+ * **State rendering**:
+ *  - [BubbleState.Idle] — alpha animates between 1.0 (opaque) and 0.4
+ *    (faded) per `state.faded`. Background = `colorScheme.primary`
+ *    (Google blue brand accent).
+ *  - [BubbleState.Pressing] — bubble pulses ~400 ms scale 1.0 → 1.1 → 1.0.
+ *  - [BubbleState.Capturing] — [SuctionAnimation] overlaid on the bubble.
+ *  - [BubbleState.Thinking] — [ThinkingRing] rotates around the bubble.
+ *  - [BubbleState.Verdict] — bubble adopts the verdict's semantic colour
+ *    (UX Step 8 palette via [verdictBackgroundFor]). The verdict's
+ *    [SessionRecord.headline] is NOT rendered here — the [FlashTooltip]
+ *    window owns that.
+ *
+ * **Callback semantics**:
  *   - [onUserActivity] fires on EVERY touch-down, regardless of how the
- *     gesture ends. This is the single signal the service routes to
- *     `BubbleEvent.UserActivity` for fade-timer reset. Covers the
- *     long-press-release case where no other callback would fire.
+ *     gesture ends.
+ *   - [onLongPressStart] (Story 1.10) fires on touch-down on the visible
+ *     56 dp bubble (i.e. when `downOnBubble == true`). Maps to
+ *     [com.verisphere.app.bubble.BubbleEvent.LongPressStarted] in the
+ *     service.
+ *   - [onPressCancelled] (Story 1.10) fires when the press is released
+ *     before the long-press deadline AND the gesture was on the bubble
+ *     AND no drag occurred. The service routes this to
+ *     [com.verisphere.app.bubble.BubbleEvent.BackToIdle] when the state
+ *     machine is currently in [BubbleState.Pressing].
  *   - [onTap] fires only on confirmed tap (motion ≤ 4 dp on bubble,
- *     elapsed < 200 ms). Currently no-op; Story 4.3 wires history.
+ *     elapsed < 200 ms). Story 4.3 wires history navigation; Story 2.4
+ *     wires detail panel from `Verdict` state.
  *   - [onTapNearMiss] fires on tap in the 24 dp halo (motion ≤ 4 dp,
- *     off bubble). Functionally equivalent to [onUserActivity] in 1.7;
- *     kept distinct for future stories that may treat near-miss
- *     specifically.
- *   - [onLongPress] fires AT the 1 s mark while the finger is still down
- *     on the visible 56 dp bubble (PRD FR3, UX-DR5, UX-DR14). Triggers
- *     the silent `AccessibilityService.takeScreenshot()` capture path
- *     (Story 1.8.5, architecture D5.13; previously `MEDIA_PROJECTION`
- *     in Story 1.8 — superseded). Fires at most once per gesture;
- *     subsequent finger movement / release does NOT re-fire.
- *   - [onDragDelta] fires on every drag tick once the gesture has been
- *     promoted to drag mode (motion > 4 dp on bubble).
- *   - [onDragEnd] fires when the dragging pointer goes up.
- *
- * Gesture pass: a single [awaitEachGesture] block disambiguates
- * tap / drag / tap-near-miss / long-press. The detection of the 1 s
- * long-press uses [withTimeoutOrNull] around [awaitPointerEvent] so the
- * deadline fires while the user is holding the bubble (no further pointer
- * events arrive during a still hold; a passive `if elapsed >= LONG_PRESS_MS`
- * inside the loop would never run). Multi-touch: the gesture tracks a
- * single pointer by id (the one that landed first); secondary fingers
- * are ignored.
+ *     off bubble).
+ *   - [onLongPress] fires AT the 1 s mark while the finger is still
+ *     down on the visible 56 dp bubble (PRD FR3, UX-DR5, UX-DR14).
+ *   - [onDragDelta] / [onDragEnd] cover the drag gesture.
  */
+@Suppress("LongParameterList") // architecture line 762: stateless consumer; every gesture surfaces a distinct callback for clarity
 @Composable
 fun BubbleOverlay(
     state: BubbleState,
     onUserActivity: () -> Unit,
+    onLongPressStart: () -> Unit,
+    onPressCancelled: () -> Unit,
     onTap: () -> Unit,
     onTapNearMiss: () -> Unit,
     onLongPress: () -> Unit,
@@ -98,7 +117,7 @@ fun BubbleOverlay(
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
-    val idleContentDescription = stringResource(R.string.bubble_idle_content_description)
+    val contentDescriptionText = bubbleContentDescriptionFor(state)
 
     val targetAlpha = if (state is BubbleState.Idle && state.faded) FADED_ALPHA else OPAQUE_ALPHA
     val animatedAlpha by animateFloatAsState(
@@ -107,18 +126,48 @@ fun BubbleOverlay(
         label = "bubbleAlpha",
     )
 
+    // Pressing-state pulse: 400 ms scale 1.0 → 1.1 → 1.0. Driven by an
+    // Animatable inside a LaunchedEffect keyed on the state's CLASS
+    // (code-review patch P6) so the pulse re-fires only on a state-class
+    // transition (e.g. Idle → Pressing) and stays stable across data-class
+    // copy emissions of the same kind (e.g. Verdict.copy(tooltipFaded=true)
+    // would otherwise re-fire the else-branch's redundant snapTo(1f)).
+    val pulseScale = remember { Animatable(initialValue = 1f) }
+    LaunchedEffect(state::class) {
+        if (state is BubbleState.Pressing) {
+            pulseScale.snapTo(1f)
+            pulseScale.animateTo(
+                targetValue = PRESSING_PULSE_PEAK,
+                animationSpec = tween(
+                    durationMillis = PRESSING_PULSE_HALF_MS,
+                    easing = LinearEasing,
+                ),
+            )
+            pulseScale.animateTo(
+                targetValue = 1f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessLow,
+                ),
+            )
+        } else {
+            pulseScale.snapTo(1f)
+        }
+    }
+
+    val bubbleBackground = bubbleBackgroundColorFor(state)
+
     Box(
         modifier = modifier
             .size(BUBBLE_HALO_DIAMETER_DP)
-            // mergeDescendants = false keeps TalkBack focused only on the
-            // visible 56 dp Surface (which carries contentDescription),
-            // not on the invisible 104 dp halo Box (UX-DR18 + AC #5).
             .semantics(mergeDescendants = false) { }
             .pointerInput(Unit) {
                 awaitEachGesture {
                     handleGesture(
                         density = density,
                         onUserActivity = onUserActivity,
+                        onLongPressStart = onLongPressStart,
+                        onPressCancelled = onPressCancelled,
                         onTap = onTap,
                         onTapNearMiss = onTapNearMiss,
                         onLongPress = onLongPress,
@@ -129,15 +178,18 @@ fun BubbleOverlay(
             },
         contentAlignment = Alignment.Center,
     ) {
+        // The 56 dp visible bubble. Alpha + pulse scale apply only to
+        // this layer — the halo Box is invisible.
         Surface(
             modifier = Modifier
                 .size(BUBBLE_DIAMETER_DP)
                 .clip(CircleShape)
                 .alpha(animatedAlpha)
+                .scale(pulseScale.value)
                 .semantics {
-                    contentDescription = idleContentDescription
+                    contentDescription = contentDescriptionText
                 },
-            color = MaterialTheme.colorScheme.primary,
+            color = bubbleBackground,
         ) {
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -150,7 +202,47 @@ fun BubbleOverlay(
                 )
             }
         }
+
+        // State-specific overlays drawn on top of the bubble. Each lives
+        // for as long as the corresponding state composes — entering /
+        // leaving the state mounts / unmounts the overlay automatically.
+        when (state) {
+            BubbleState.Capturing -> SuctionAnimation()
+            BubbleState.Thinking -> ThinkingRing()
+            else -> Unit
+        }
     }
+}
+
+@Composable
+private fun bubbleContentDescriptionFor(state: BubbleState): String = when (state) {
+    is BubbleState.Idle -> stringResource(R.string.bubble_idle_content_description)
+    BubbleState.Pressing -> stringResource(R.string.bubble_pressing_content_description)
+    BubbleState.Capturing -> stringResource(R.string.bubble_capturing_content_description)
+    BubbleState.Thinking -> stringResource(R.string.bubble_thinking_content_description)
+    is BubbleState.Verdict -> {
+        // Code-review patch P3 — emit the verdict label only on the
+        // bubble's contentDescription. The verdict headline is
+        // announced by [com.verisphere.app.bubble.ui.FlashTooltip]'s
+        // `LiveRegionMode.Polite` semantic. Concatenating the headline
+        // here would (a) double-announce on every TalkBack focus and
+        // (b) couple session-content (`record.headline`) to the
+        // bubble's persistent accessibility node beyond the tooltip's
+        // visible lifetime.
+        val labelRes = when (state.record.verdictLabel) {
+            VerdictLabel.TRUE -> R.string.bubble_verdict_true_content_description
+            VerdictLabel.FALSE -> R.string.bubble_verdict_false_content_description
+            VerdictLabel.DOUBTFUL -> R.string.bubble_verdict_doubtful_content_description
+            VerdictLabel.NON_VERIFIABLE -> R.string.bubble_verdict_non_verifiable_content_description
+        }
+        stringResource(labelRes)
+    }
+}
+
+@Composable
+private fun bubbleBackgroundColorFor(state: BubbleState): Color = when (state) {
+    is BubbleState.Verdict -> colorResource(verdictBackgroundFor(state.record.verdictLabel))
+    else -> MaterialTheme.colorScheme.primary
 }
 
 /**
@@ -158,35 +250,40 @@ fun BubbleOverlay(
  * [awaitEachGesture] block; the outer [pointerInput] re-arms the next
  * gesture automatically.
  *
- * Algorithm:
+ * Story 1.10 additions:
+ *  - [onLongPressStart] fires immediately after [onUserActivity] when
+ *    the touch-down landed on the visible 56 dp bubble.
+ *  - [onPressCancelled] fires from the new branch in [handlePointerUp]
+ *    when the press is released before the long-press fires AND the
+ *    gesture was on the bubble AND no drag occurred.
+ *
+ * Algorithm (unchanged from Story 1.7 + 1.8.5 P10 patch):
  *   1. Capture down position + timestamp + whether down landed inside
  *      the visible 56 dp circle. Fire [onUserActivity] immediately so
  *      the service resets its fade timer regardless of how the gesture
- *      ends (covers long-press-release, drag-cancel, etc.).
+ *      ends. If the down was on the bubble, also fire
+ *      [onLongPressStart] so the state machine transitions to Pressing.
  *   2. Track cumulative drag distance using a single pointer ID — only
- *      the pointer that landed first counts. Secondary fingers are
- *      ignored.
+ *      the pointer that landed first counts.
  *   3. While the deadline is in the future and the long-press has not
  *      yet fired, await pointer events under [withTimeoutOrNull] so the
- *      1 s deadline fires WHILE THE FINGER IS HELD (no further events
- *      arrive during a still hold; passive `if elapsed >= 1 s` inside
- *      the loop would never run).
+ *      1 s deadline fires WHILE THE FINGER IS HELD.
  *   4. As soon as cumulative motion exceeds the 4 dp threshold AND the
  *      down was on the bubble, promote to drag mode and emit deltas.
- *      Drag mode also disables further long-press detection (a hand
- *      that's moving is a drag, not a press).
  *   5. On pointer up:
  *      - drag mode → [onDragEnd].
- *      - long-press already fired → silent (no [onTap] double-fire).
+ *      - long-press already fired → silent.
  *      - no drag, on bubble, elapsed < 200 ms → [onTap].
  *      - no drag, off bubble (halo) → [onTapNearMiss].
- *      - else (long-press shape that didn't reach 1 s — e.g. release at
- *        500 ms with no motion) → silently drop.
+ *      - no drag, on bubble, elapsed ≥ 200 ms but no long-press →
+ *        [onPressCancelled] (Story 1.10 — was silent in 1.7).
  */
-@Suppress("LongMethod", "CyclomaticComplexMethod") // single linear gesture loop — extracting helpers fragments the state machine across functions
+@Suppress("LongMethod", "CyclomaticComplexMethod", "LongParameterList") // single linear gesture loop
 private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.handleGesture(
     density: Density,
     onUserActivity: () -> Unit,
+    onLongPressStart: () -> Unit,
+    onPressCancelled: () -> Unit,
     onTap: () -> Unit,
     onTapNearMiss: () -> Unit,
     onLongPress: () -> Unit,
@@ -207,11 +304,15 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.han
     )
     val longPressDeadlineMs = downTime + LONG_PRESS_MS
 
-    // Touch-down is itself user activity — the service resets the fade
-    // timer here so that long-press releases (which emit no other
-    // callback in 1.7) still keep the bubble opaque while the user is
-    // touching it.
+    // Touch-down is itself user activity — always fire so the service
+    // can reset the fade timer. If the down landed on the visible
+    // bubble, ALSO fire onLongPressStart (state machine transitions
+    // Idle/Verdict → Pressing). Halo-only touches DO NOT fire
+    // onLongPressStart (they're tap-near-miss or drag candidates).
     onUserActivity()
+    if (downOnBubble) {
+        onLongPressStart()
+    }
 
     var totalDragPx = 0f
     var inDragMode = false
@@ -219,16 +320,9 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.han
     var longPressFired = false
 
     while (true) {
-        // Passive elapsed check (Story 1.8.5 code-review patch P10
-        // robustness): fire the long-press if 1 s has elapsed since
-        // touch-down, REGARDLESS of whether the timeout below was
-        // about to fire. This covers two cases the timeout-only path
-        // misses: (a) synthetic gestures from instrumented tests that
-        // inject MOVE events every ~5 ms (defeating the `withTimeoutOrNull`),
-        // (b) real users whose finger pressure jitters generate
-        // redundant pointer events at the same position. Real users
-        // who hold perfectly still still trigger the timeout below;
-        // this passive check is additive, not a replacement.
+        // Passive elapsed check (Story 1.8.5 patch P10): fire long-press
+        // if 1 s has elapsed since touch-down regardless of the timeout
+        // path. Covers synthetic gestures + finger-pressure jitter.
         if (
             !longPressFired && !inDragMode &&
             downOnBubble && totalDragPx <= dragThresholdPx &&
@@ -238,10 +332,6 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.han
             onLongPress()
         }
 
-        // Compute the per-iteration timeout: the time remaining until
-        // the 1 s long-press deadline. Once the long-press has fired
-        // (or the gesture became a drag), we fall back to an indefinite
-        // awaitPointerEvent — no more deadline to chase.
         val remainingMs = longPressDeadlineMs - SystemClock.uptimeMillis()
         val event = if (!longPressFired && !inDragMode && remainingMs > 0L) {
             withTimeoutOrNull(remainingMs) { awaitPointerEvent() }
@@ -250,11 +340,6 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.han
         }
 
         if (event == null) {
-            // The long-press deadline elapsed while the finger is still
-            // down with no events arriving. Promote to long-press if
-            // the gesture shape qualifies (on the visible bubble, no
-            // significant motion). Halo holds and on-bubble holds that
-            // have already drifted past 4 dp do NOT promote.
             if (downOnBubble && totalDragPx <= dragThresholdPx) {
                 longPressFired = true
                 onLongPress()
@@ -262,9 +347,6 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.han
             continue
         }
 
-        // Track only the pointer that landed first. If it's no longer
-        // in the changes list (system cancelled, or a different pointer
-        // is producing events while ours is gone), terminate the gesture.
         val change = event.changes.firstOrNull { it.id == pointerId } ?: return
 
         if (change.changedToUp()) {
@@ -277,6 +359,7 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.han
                 elapsedMs = SystemClock.uptimeMillis() - downTime,
                 onTap = onTap,
                 onTapNearMiss = onTapNearMiss,
+                onPressCancelled = onPressCancelled,
                 onDragEnd = onDragEnd,
             )
             return
@@ -298,6 +381,7 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.han
     }
 }
 
+@Suppress("LongParameterList") // mirrors handleGesture's callback surface
 private fun handlePointerUp(
     inDragMode: Boolean,
     downOnBubble: Boolean,
@@ -307,17 +391,21 @@ private fun handlePointerUp(
     elapsedMs: Long,
     onTap: () -> Unit,
     onTapNearMiss: () -> Unit,
+    onPressCancelled: () -> Unit,
     onDragEnd: () -> Unit,
 ) {
     when {
         inDragMode -> onDragEnd()
-        // Long-press already fired during the hold — releasing the finger
-        // afterwards is just a silent end-of-gesture. Do NOT also fire
-        // onTap (which would request a second capture for the same press).
-        longPressFired -> Unit
-        totalDragPx > dragThresholdPx -> Unit
+        longPressFired -> Unit                                       // long-press fired during hold; silent end-of-gesture
+        totalDragPx > dragThresholdPx -> Unit                        // drag never promoted past threshold but moved off-bubble
         downOnBubble && elapsedMs < TAP_TIMEOUT_MS -> onTap()
         !downOnBubble -> onTapNearMiss()
+        // Story 1.10: press released BEFORE the long-press fired AND on
+        // the bubble AND elapsed >= 200 ms → user started a long-press
+        // and let go early. Surface as onPressCancelled so the service
+        // can route back to Idle from Pressing (the previous Story 1.7
+        // path was a silent drop).
+        downOnBubble && elapsedMs >= TAP_TIMEOUT_MS -> onPressCancelled()
         else -> Unit
     }
 }
@@ -332,13 +420,10 @@ private fun isInsideBubbleCircle(
     return hypot(dx, dy) <= bubbleRadiusPx
 }
 
-// UX-DR4 spacing token (56 dp) — kept inline because the composable has
-// no Density at construction time; the SERVICE has the matching constant
-// in pixels for WindowManager arithmetic.
+// UX-DR4 spacing token (56 dp).
 private val BUBBLE_DIAMETER_DP = 56.dp
 
 // 56 dp visible bubble + 24 dp halo on each side = 104 dp window.
-// See KDoc on [BubbleOverlay] for the rationale.
 private val BUBBLE_HALO_DIAMETER_DP = 104.dp
 
 private const val FADE_DURATION_MS = 300
@@ -347,15 +432,17 @@ private const val FADE_DURATION_MS = 300
 private const val DRAG_THRESHOLD_DP = 4
 private const val TAP_TIMEOUT_MS = 200L
 
-// Long-press duration (PRD FR3 — "≈ 1 second", UX-DR5). Detection happens
-// AT this mark while the finger is still down; releasing earlier silently
-// drops the gesture (no event emitted). UX-DR14 routes `Idle × Long-press`
-// to the silent `AccessibilityService.takeScreenshot()` capture path
-// (Story 1.8.5, architecture D5.13 — superseded MEDIA_PROJECTION from Story 1.8).
+// Long-press duration (PRD FR3 — "≈ 1 second", UX-DR5).
 private const val LONG_PRESS_MS = 1_000L
 
 private const val OPAQUE_ALPHA = 1.0f
 private const val FADED_ALPHA = 0.4f
+
+// Story 1.10 — Pressing pulse: 400 ms scale 1.0 → 1.1 → 1.0.
+private const val PRESSING_PULSE_PEAK = 1.1f
+private const val PRESSING_PULSE_HALF_MS = 200
+
+// ----- Previews -------------------------------------------------------
 
 @Preview(showBackground = true, name = "Idle - opaque - Light")
 @Composable
@@ -363,12 +450,9 @@ private fun BubbleOverlayIdleOpaqueLightPreview() {
     VeriSphereTheme {
         BubbleOverlay(
             state = BubbleState.Idle(faded = false),
-            onUserActivity = {},
-            onTap = {},
-            onTapNearMiss = {},
-            onLongPress = {},
-            onDragDelta = { _, _ -> },
-            onDragEnd = {},
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
         )
     }
 }
@@ -383,12 +467,9 @@ private fun BubbleOverlayIdleOpaqueDarkPreview() {
     VeriSphereTheme {
         BubbleOverlay(
             state = BubbleState.Idle(faded = false),
-            onUserActivity = {},
-            onTap = {},
-            onTapNearMiss = {},
-            onLongPress = {},
-            onDragDelta = { _, _ -> },
-            onDragEnd = {},
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
         )
     }
 }
@@ -399,12 +480,9 @@ private fun BubbleOverlayIdleFadedLightPreview() {
     VeriSphereTheme {
         BubbleOverlay(
             state = BubbleState.Idle(faded = true),
-            onUserActivity = {},
-            onTap = {},
-            onTapNearMiss = {},
-            onLongPress = {},
-            onDragDelta = { _, _ -> },
-            onDragEnd = {},
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
         )
     }
 }
@@ -419,12 +497,233 @@ private fun BubbleOverlayIdleFadedDarkPreview() {
     VeriSphereTheme {
         BubbleOverlay(
             state = BubbleState.Idle(faded = true),
-            onUserActivity = {},
-            onTap = {},
-            onTapNearMiss = {},
-            onLongPress = {},
-            onDragDelta = { _, _ -> },
-            onDragEnd = {},
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Pressing - Light")
+@Composable
+private fun BubbleOverlayPressingLightPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Pressing,
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+@Preview(
+    showBackground = true,
+    name = "Pressing - Dark",
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun BubbleOverlayPressingDarkPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Pressing,
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Capturing - Light")
+@Composable
+private fun BubbleOverlayCapturingLightPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Capturing,
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+@Preview(
+    showBackground = true,
+    name = "Capturing - Dark",
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun BubbleOverlayCapturingDarkPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Capturing,
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Thinking - Light")
+@Composable
+private fun BubbleOverlayThinkingLightPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Thinking,
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+@Preview(
+    showBackground = true,
+    name = "Thinking - Dark",
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun BubbleOverlayThinkingDarkPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Thinking,
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+private fun previewVerdictRecord(label: VerdictLabel): SessionRecord = SessionRecord(
+    id = "preview-id",
+    timestampMs = 0L,
+    verdictLabel = label,
+    headline = "Preview verdict for $label",
+    contextLines = emptyList(),
+    sourceLinks = emptyList<SourceCitation>(),
+    ocrText = "",
+    regionalBiasNote = null,
+)
+
+@Preview(showBackground = true, name = "Verdict TRUE - Light")
+@Composable
+private fun BubbleOverlayVerdictTrueLightPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Verdict(previewVerdictRecord(VerdictLabel.TRUE)),
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+@Preview(
+    showBackground = true,
+    name = "Verdict FALSE - Dark",
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun BubbleOverlayVerdictFalseDarkPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Verdict(previewVerdictRecord(VerdictLabel.FALSE)),
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Verdict DOUBTFUL - Light")
+@Composable
+private fun BubbleOverlayVerdictDoubtfulLightPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Verdict(previewVerdictRecord(VerdictLabel.DOUBTFUL)),
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Verdict NON-VERIFIABLE - Light")
+@Composable
+private fun BubbleOverlayVerdictNonVerifiableLightPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Verdict(previewVerdictRecord(VerdictLabel.NON_VERIFIABLE)),
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+// Code-review patch P7 — 4 previously-missing dark/light Verdict previews
+// added so the catalogue covers every (verdictLabel × theme) pair (16 total).
+
+@Preview(
+    showBackground = true,
+    name = "Verdict TRUE - Dark",
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun BubbleOverlayVerdictTrueDarkPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Verdict(previewVerdictRecord(VerdictLabel.TRUE)),
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Verdict FALSE - Light")
+@Composable
+private fun BubbleOverlayVerdictFalseLightPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Verdict(previewVerdictRecord(VerdictLabel.FALSE)),
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+@Preview(
+    showBackground = true,
+    name = "Verdict DOUBTFUL - Dark",
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun BubbleOverlayVerdictDoubtfulDarkPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Verdict(previewVerdictRecord(VerdictLabel.DOUBTFUL)),
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+@Preview(
+    showBackground = true,
+    name = "Verdict NON-VERIFIABLE - Dark",
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun BubbleOverlayVerdictNonVerifiableDarkPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Verdict(previewVerdictRecord(VerdictLabel.NON_VERIFIABLE)),
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
         )
     }
 }

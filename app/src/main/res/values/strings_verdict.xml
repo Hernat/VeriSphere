@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VeriSphere verdict-specific strings — Story 1.10 (UX-DR17, UX spec line 784).
+  Kept in a dedicated file (architecture line 700) because the verdict
+  words are the highest-stakes copy in the product. Both files merge
+  into the same R.string.* namespace.
+
+  Verdict labels are uppercase per UX spec; non-verifiable carries a
+  hyphen, not an underscore. ContentDescriptions follow the pattern
+  "Verdict: {label}" for TalkBack consumption (UX-DR18, NFR12).
+-->
+<resources>
+
+    <!-- Story 1.10 — FlashTooltip verdict word strings (UX-DR17, UX spec line 784) -->
+    <string name="flash_verdict_true">TRUE</string>
+    <string name="flash_verdict_false">FALSE</string>
+    <string name="flash_verdict_doubtful">DOUBTFUL</string>
+    <string name="flash_verdict_non_verifiable">NON-VERIFIABLE</string>
+
+    <!-- Story 1.10 — Verdict-state contentDescriptions for TalkBack (UX-DR18, NFR12) -->
+    <string name="bubble_verdict_true_content_description">Verdict: true</string>
+    <string name="bubble_verdict_false_content_description">Verdict: false</string>
+    <string name="bubble_verdict_doubtful_content_description">Verdict: doubtful</string>
+    <string name="bubble_verdict_non_verifiable_content_description">Verdict: non-verifiable</string>
+
+</resources>

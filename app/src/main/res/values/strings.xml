@@ -16,6 +16,12 @@
     <!-- Story 1.7 — BubbleOverlay idle composable accessibility (UX-DR5, NFR12, UX-DR18) -->
     <string name="bubble_idle_content_description">VeriSphere bubble, idle</string>
 
+    <!-- Story 1.10 — BubbleOverlay non-Idle, non-Verdict state contentDescriptions
+         (UX-DR18, NFR12). Verdict-state contentDescriptions live in strings_verdict.xml. -->
+    <string name="bubble_pressing_content_description">VeriSphere bubble, capturing in 1 second</string>
+    <string name="bubble_capturing_content_description">VeriSphere bubble, capturing</string>
+    <string name="bubble_thinking_content_description">VeriSphere bubble, verifying</string>
+
     <!-- Story 1.8.5 — VeriSphereAccessibilityService (architecture D5.13, AR27, D2.11; UX-DR17 warm-tone copy) -->
     <string name="accessibility_service_label">VeriSphere</string>
     <string name="accessibility_service_description">VeriSphere capture l\'écran que tu vérifies par long-press. Pas de lecture en arrière-plan, pas d\'actions automatiques. Désactivable à tout moment dans Settings.</string>

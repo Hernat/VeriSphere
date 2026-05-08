@@ -3,9 +3,12 @@ package com.verisphere.app
 import android.content.Context
 import android.util.Base64
 import com.verisphere.app.gemini.GeminiClient
+import com.verisphere.app.storage.HistoryRepository
+import com.verisphere.app.storage.HistoryRepositoryImpl
 import com.verisphere.app.storage.RateLimitRepository
 import com.verisphere.app.storage.RateLimitRepositoryImpl
 import com.verisphere.app.storage.SecureStorage
+import com.verisphere.app.storage.SessionRecord
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -105,9 +108,29 @@ class AppContainer(private val applicationContext: Context) {
         )
     }
 
-    // TODO Story 1.10: val historyRepository: HistoryRepository by lazy {
-    //     HistoryRepositoryImpl(secureStorage)
-    // }
+    /**
+     * Single talker over [SecureStorage] for the persisted session
+     * history (architecture AR13, D1.1, D1.2, D1.3; PRD FR15, FR16,
+     * FR17, NFR16). Story 1.10 wires the lazy field; the
+     * [com.verisphere.app.bubble.BubbleOverlayService] triggers the
+     * first load by calling [HistoryRepository.append] on the first
+     * verdict outcome — keeping the Keystore-backed first-access
+     * (~50–200 ms) off `Application.onCreate` (NFR3 cold-start budget).
+     *
+     * The lambda seam (`readHistory` / `writeHistory`) lets unit tests
+     * inject in-memory fakes — the JSON round-trip itself is covered by
+     * `SessionRecordSerializationTest` + `SecureStorageInstrumentedTest`.
+     */
+    val historyRepository: HistoryRepository by lazy {
+        HistoryRepositoryImpl(
+            readHistory = {
+                secureStorage.readJson<List<SessionRecord>>(HistoryRepositoryImpl.KEY_HISTORY)
+            },
+            writeHistory = { list ->
+                secureStorage.writeJson(HistoryRepositoryImpl.KEY_HISTORY, list)
+            },
+        )
+    }
 
     // TODO Story 6.1: val versionChecker: VersionChecker by lazy {
     //     VersionChecker(httpClient)

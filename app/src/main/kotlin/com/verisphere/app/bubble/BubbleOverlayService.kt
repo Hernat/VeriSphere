@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
+import android.graphics.Point
 import android.os.Build
 import android.os.IBinder
 import android.util.DisplayMetrics
@@ -16,8 +17,10 @@ import android.view.WindowManager
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.app.NotificationCompat
@@ -38,8 +41,11 @@ import com.verisphere.app.R
 import com.verisphere.app.VeriSphereApplication
 import com.verisphere.app.accessibility.VeriSphereAccessibilityService
 import com.verisphere.app.bubble.ui.BubbleOverlay
+import com.verisphere.app.bubble.ui.FlashTooltip
+import com.verisphere.app.bubble.ui.PointerDirection
 import com.verisphere.app.capture.CapturePipeline
 import com.verisphere.app.gemini.VerificationOutcome
+import com.verisphere.app.storage.SessionRecord
 import com.verisphere.app.ui.theme.VeriSphereTheme
 import com.verisphere.app.util.tag
 import kotlinx.coroutines.CoroutineScope
@@ -47,6 +53,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
@@ -118,6 +127,22 @@ class BubbleOverlayService :
     private var overlayAttached: Boolean = false
     private var snapJob: Job? = null
     private var captureJob: Job? = null
+
+    // Story 1.10 — separate WindowManager view for the FlashTooltip
+    // (Critical Dev Note #3 in story file). Kept distinct from the
+    // bubble's halo window so the bubble's 104 dp + FLAG_NOT_TOUCH_MODAL
+    // semantics are preserved unchanged. Lifecycle:
+    //   - created on transition into BubbleState.Verdict;
+    //   - removed on transition out of BubbleState.Verdict.
+    private var tooltipView: ComposeView? = null
+    private var tooltipParams: WindowManager.LayoutParams? = null
+    private var tooltipObserverJob: Job? = null
+
+    // Story 1.10 — published bubble position in screen pixels (top-left
+    // of the halo window, i.e. `params.x`, `params.y`). Tooltip's Compose
+    // tree reads this to position itself relative to the bubble; updated
+    // whenever drag / snap / persist mutates `params`.
+    private val bubblePositionFlow = MutableStateFlow(Point(0, 0))
 
     // Drag-rounding accumulators (Story 1.7 review fix #4): per-frame
     // dxPx / dyPx are floats; rounding each independently to Int truncates
@@ -207,6 +232,7 @@ class BubbleOverlayService :
 
         windowManager = getSystemService(WindowManager::class.java)
         attachOverlayView()
+        startTooltipObserver()
 
         Log.d(TAG, "Service created; overlay attached=$overlayAttached")
     }
@@ -257,6 +283,12 @@ class BubbleOverlayService :
         if (::bubbleStateMachine.isInitialized) {
             bubbleStateMachine.dispose()
         }
+        // Story 1.10 — cancel the tooltip observer Job and detach the
+        // tooltip view BEFORE serviceScope.cancel() so the
+        // detachTooltipView() call sees a still-valid windowManager.
+        tooltipObserverJob?.cancel()
+        tooltipObserverJob = null
+        detachTooltipView()
         // Story 1.8.5: no MediaProjection token to release — the
         // VeriSphereAccessibilityService owns its own lifecycle via
         // Settings (D5.13). The bubble service tear-down is now leaner.
@@ -393,6 +425,8 @@ class BubbleOverlayService :
                     BubbleOverlay(
                         state = state,
                         onUserActivity = ::onBubbleUserActivity,
+                        onLongPressStart = ::onBubbleLongPressStart,
+                        onPressCancelled = ::onBubblePressCancelled,
                         onTap = ::onBubbleTap,
                         onTapNearMiss = ::onBubbleTapNearMiss,
                         onLongPress = ::onBubbleLongPress,
@@ -402,6 +436,11 @@ class BubbleOverlayService :
                 }
             }
         }
+
+        // Story 1.10 — publish the initial bubble position so the tooltip
+        // window's Compose tree (created later on entering Verdict)
+        // observes a valid coordinate from its first composition.
+        publishBubblePosition()
 
         try {
             windowManager.addView(composeView, params)
@@ -476,11 +515,37 @@ class BubbleOverlayService :
     }
 
     /**
+     * Story 1.10 — touch-down on the visible 56 dp bubble. Routes to
+     * [BubbleEvent.LongPressStarted] which the reducer maps:
+     *   - `Idle / Verdict → Pressing` (UX-DR14 `Idle × Long-press`,
+     *     `Verdict × Long-press` re-trigger).
+     *   - other states → no-op (defensive).
+     */
+    private fun onBubbleLongPressStart() {
+        bubbleStateMachine.onEvent(BubbleEvent.LongPressStarted)
+    }
+
+    /**
+     * Story 1.10 — finger released on the bubble before the 1 s
+     * long-press deadline AND no drag occurred AND elapsed ≥ 200 ms.
+     * Routes to [BubbleEvent.BackToIdle] only when the state machine
+     * is currently in [BubbleState.Pressing] — guarding ensures we
+     * don't accidentally cancel a Verdict from a halo tap.
+     */
+    private fun onBubblePressCancelled() {
+        if (bubbleStateMachine.state.value == BubbleState.Pressing) {
+            bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
+        }
+    }
+
+    /**
      * Bubble tap callback — Story 1.7 leaves this a true no-op. Story 4.3
-     * wires `Idle × Tap` to "open chronological history" per UX-DR14 — DO
-     * NOT add navigation logic here in Story 1.7's scope. UserActivity is
-     * already emitted on touch-down via [onBubbleUserActivity], so the
-     * fade-timer reset is taken care of regardless of how the gesture ends.
+     * wires `Idle × Tap` to "open chronological history" per UX-DR14;
+     * Story 2.4 wires `Verdict × Tap` to "expand detail panel". Story
+     * 1.10 keeps this empty — neither follow-up has shipped.
+     * UserActivity is already emitted on touch-down via
+     * [onBubbleUserActivity], so the fade-timer reset is taken care of
+     * regardless of how the gesture ends.
      */
     @Suppress("EmptyFunctionBlock")
     private fun onBubbleTap() {
@@ -489,13 +554,16 @@ class BubbleOverlayService :
 
     /**
      * Halo tap-near-miss callback. UserActivity is already emitted on
-     * touch-down by [onBubbleUserActivity]; this stays as a distinct
-     * surface for future stories that may treat near-miss specifically
-     * (e.g., a different haptic pattern).
+     * touch-down by [onBubbleUserActivity]. Story 1.10: when the state
+     * is [BubbleState.Verdict], a halo tap is a "next user gesture"
+     * signal that returns the bubble to Idle (UX-DR6 line 679) — the
+     * tooltip text was already faded by the timer; the colour resets
+     * here.
      */
-    @Suppress("EmptyFunctionBlock")
     private fun onBubbleTapNearMiss() {
-        // Intentionally empty — see KDoc.
+        if (bubbleStateMachine.state.value is BubbleState.Verdict) {
+            bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
+        }
     }
 
     /**
@@ -541,24 +609,102 @@ class BubbleOverlayService :
     }
 
     /**
-     * Run the capture pipeline. Story 1.8.5 simplification: no more
-     * runtime FGS-type promote/demote dance — the service stays at
-     * `specialUse` for its entire lifetime because the capture API
-     * (AccessibilityService.takeScreenshot, D5.13) does not require
-     * `FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION` like the deprecated
-     * MediaProjection path did (D5.3 deprecated). Story 1.10 will
-     * dispatch `BubbleEvent.VerificationOutcomeReceived(outcome)` so
-     * the bubble visually reflects the result.
+     * Run the capture pipeline. Story 1.8.5 simplification: the service
+     * stays at FGS type `specialUse` for its entire lifetime because
+     * the capture API (AccessibilityService.takeScreenshot, D5.13) does
+     * not require `FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION` like the
+     * deprecated MediaProjection path did (D5.3 deprecated).
+     *
+     * Story 1.10 — persist BEFORE dispatching the state event (Critical
+     * Dev Note #6 in story file): observers of [bubbleStateMachine.state]
+     * (the bubble overlay's Compose recomposition AND the future Story 4
+     * history view via `historyRepository.observe()`) must never see a
+     * [BubbleState.Verdict] holding a record that has not been
+     * persisted. A process-kill in the gap would lose the verdict from
+     * history while the user already saw it (FR15 / FR17 violation).
      */
     private suspend fun runCaptureAndDispatch() {
         val outcome = capturePipeline.runCapture()
         Log.d(TAG, "capture outcome: ${outcome.logLabel()}")
-        // Story 1.10 will route the outcome into the state machine.
+        if (outcome is VerificationOutcome.Verdict) {
+            container.historyRepository.append(outcome.record)
+        }
+        bubbleStateMachine.onEvent(BubbleEvent.VerificationOutcomeReceived(outcome))
     }
 
     private fun VerificationOutcome.logLabel(): String = when (this) {
         is VerificationOutcome.Verdict -> "Verdict(id=${record.id})"
         is VerificationOutcome.Failure -> this::class.simpleName ?: "Failure"
+    }
+
+    /**
+     * Story 1.10 — full-screen tooltip overlay laid out via a custom
+     * Compose [androidx.compose.ui.layout.Layout] that places the
+     * [FlashTooltip] adjacent to the bubble's current screen position.
+     *
+     * Lives at the top of the file (alongside the `setContent {}`-style
+     * composables) because it directly references service-side state
+     * (`bubblePositionFlow`, `BUBBLE_DIAMETER_DP`). Logic is small
+     * enough to inline rather than promote to its own file.
+     */
+    @androidx.compose.runtime.Composable
+    private fun TooltipOverlayContent(
+        verdict: BubbleState.Verdict,
+        bubblePosition: Point,
+        density: Float,
+    ) {
+        val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+        val screenWidthPx = (configuration.screenWidthDp * density).roundToInt()
+        val bubbleSizePx = (BUBBLE_DIAMETER_DP * density).roundToInt()
+        val haloSizePx = (BUBBLE_HALO_DIAMETER_DP * density).roundToInt()
+        val haloOffsetPx = (haloSizePx - bubbleSizePx) / 2
+        val gapPx = (TOOLTIP_GAP_DP * density).roundToInt()
+
+        val visibleBubbleX = bubblePosition.x + haloOffsetPx
+        val visibleBubbleY = bubblePosition.y + haloOffsetPx
+        val direction = if (visibleBubbleX + bubbleSizePx / 2 < screenWidthPx / 2) {
+            PointerDirection.LEFT
+        } else {
+            PointerDirection.RIGHT
+        }
+
+        androidx.compose.ui.layout.Layout(
+            content = {
+                FlashTooltip(
+                    verdictLabel = verdict.record.verdictLabel,
+                    headline = verdict.record.headline,
+                    textFaded = verdict.tooltipFaded,
+                    pointerDirection = direction,
+                )
+            },
+            modifier = Modifier.fillMaxSize(),
+        ) { measurables, constraints ->
+            val tooltipPlaceable = measurables[0].measure(
+                androidx.compose.ui.unit.Constraints(
+                    maxWidth = (constraints.maxWidth * 3) / 4, // 75 % of screen, UX-DR4
+                ),
+            )
+            layout(constraints.maxWidth, constraints.maxHeight) {
+                val tooltipX = if (direction == PointerDirection.LEFT) {
+                    visibleBubbleX + bubbleSizePx + gapPx
+                } else {
+                    visibleBubbleX - tooltipPlaceable.width - gapPx
+                }
+                val tooltipY = visibleBubbleY + bubbleSizePx / 2 - tooltipPlaceable.height / 2
+                // Code-review patch P11 — clamp on BOTH axes to keep the
+                // tooltip fully on screen. Without bottom-clamping, a
+                // long-headline tooltip rendered next to a low-positioned
+                // bubble extends past the bottom edge and is clipped
+                // invisibly. Use coerceIn(min, max) instead of
+                // coerceAtLeast(0) so neither axis can exceed the screen.
+                val maxX = (constraints.maxWidth - tooltipPlaceable.width).coerceAtLeast(0)
+                val maxY = (constraints.maxHeight - tooltipPlaceable.height).coerceAtLeast(0)
+                tooltipPlaceable.place(
+                    x = tooltipX.coerceIn(0, maxX),
+                    y = tooltipY.coerceIn(0, maxY),
+                )
+            }
+        }
     }
 
     private fun onBubbleDragDelta(dxPx: Float, dyPx: Float) {
@@ -600,6 +746,9 @@ class BubbleOverlayService :
         params.x = (params.x + intDx).coerceIn(minX, maxX)
         params.y = (params.y + intDy).coerceIn(minY, maxY)
         safeUpdateViewLayout()
+        // Story 1.10 — keep the tooltip overlay in lock-step with the
+        // bubble during drag (UX-DR14 row "Verdict × Drag = Reposition").
+        publishBubblePosition()
     }
 
     private fun onBubbleDragEnd() {
@@ -670,6 +819,7 @@ class BubbleOverlayService :
             if (overlayAttached) {
                 params.x = value.roundToInt()
                 safeUpdateViewLayout()
+                publishBubblePosition()    // Story 1.10 — sync tooltip during snap animation
             }
         }
     }
@@ -690,6 +840,142 @@ class BubbleOverlayService :
         if (!::container.isInitialized) return
         container.secureStorage.writeLong(KEY_BUBBLE_X, params.x.toLong())
         container.secureStorage.writeLong(KEY_BUBBLE_Y, params.y.toLong())
+        publishBubblePosition()
+    }
+
+    /**
+     * Story 1.10 — keeps [bubblePositionFlow] in lock-step with
+     * [params].x / [params].y so the [tooltipView]'s Compose tree can
+     * observe live bubble movement (drag during Verdict state slides
+     * the tooltip alongside the bubble per UX-DR14 row "Verdict × Drag
+     * = Reposition").
+     */
+    private fun publishBubblePosition() {
+        if (!::params.isInitialized) return
+        bubblePositionFlow.value = Point(params.x, params.y)
+    }
+
+    /**
+     * Story 1.10 — observe state transitions to/from
+     * [BubbleState.Verdict] and create/destroy the FlashTooltip
+     * [WindowManager] view accordingly. Kept in [serviceScope] so the
+     * coroutine dies with the service.
+     *
+     * The observer reads `state.collectAsState()` content INSIDE the
+     * tooltip view's `setContent {}` block, so Compose handles all
+     * intermediate updates (e.g. Verdict.tooltipFaded flipping after
+     * the 5–8 s timer) without us re-creating the view.
+     */
+    private fun startTooltipObserver() {
+        tooltipObserverJob?.cancel()
+        tooltipObserverJob = serviceScope.launch {
+            // Code-review patch P10 — guard the collect body. An
+            // unexpected exception inside attach/detach (Compose init
+            // failure, hostile OEM WindowManager throws) would
+            // otherwise kill the observer coroutine; subsequent verdicts
+            // would never re-show the tooltip. Catch + log keeps the
+            // service alive in degraded mode (bubble visible, tooltip
+            // missing) — better than a silently-dead observer.
+            try {
+                bubbleStateMachine.state
+                    .map { it is BubbleState.Verdict }
+                    .distinctUntilChanged()
+                    .collect { isVerdict ->
+                        if (isVerdict) {
+                            attachTooltipView()
+                        } else {
+                            detachTooltipView()
+                        }
+                    }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Re-throw cancellation so structured concurrency works.
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                Log.e(TAG, "tooltip observer crashed — degraded mode (no tooltip until next service start)", e)
+            }
+        }
+    }
+
+    private fun attachTooltipView() {
+        if (tooltipView != null) return
+        if (!::windowManager.isInitialized) return
+
+        // Make sure the published bubble position reflects the current
+        // params before the Compose tree first reads it.
+        publishBubblePosition()
+
+        val view = ComposeView(this).apply {
+            setViewTreeLifecycleOwner(this@BubbleOverlayService)
+            setViewTreeSavedStateRegistryOwner(this@BubbleOverlayService)
+            setViewTreeViewModelStoreOwner(this@BubbleOverlayService)
+            setContent {
+                VeriSphereTheme {
+                    val state by bubbleStateMachine.state.collectAsState()
+                    val verdict = state as? BubbleState.Verdict
+                    if (verdict != null) {
+                        val bubblePosition by bubblePositionFlow.collectAsState()
+                        TooltipOverlayContent(
+                            verdict = verdict,
+                            bubblePosition = bubblePosition,
+                            density = resources.displayMetrics.density,
+                        )
+                    }
+                }
+            }
+        }
+
+        // FLAG_NOT_TOUCHABLE — Story 1.10 makes the tooltip purely
+        // decorative; every touch passes through to the bubble window
+        // (and beyond, to the source app via FLAG_NOT_TOUCH_MODAL on
+        // the bubble window). Story 2.4 will replace this flag with
+        // hit-test-only-on-tooltip semantics when wiring tap-to-expand.
+        val tParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
+        }
+
+        try {
+            windowManager.addView(view, tParams)
+            tooltipView = view
+            tooltipParams = tParams
+        } catch (e: WindowManager.BadTokenException) {
+            Log.w(TAG, "Cannot add tooltip overlay window — overlay permission likely revoked.", e)
+            view.disposeComposition()
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            // Code-review patch P9 — catch beyond BadTokenException.
+            // Hostile OEMs / racy permission revocations can throw
+            // IllegalStateException ("view already attached"),
+            // NullPointerException (window manager service unbound),
+            // or RuntimeException. Match the bubble window's
+            // degraded-mode pattern at attachOverlayView's catch block
+            // (lines ~409-446) — log, dispose composition, leave the
+            // service alive without the tooltip.
+            Log.w(TAG, "Tooltip overlay attach failed — degraded mode.", e)
+            view.disposeComposition()
+        }
+    }
+
+    private fun detachTooltipView() {
+        val view = tooltipView ?: return
+        if (::windowManager.isInitialized) {
+            try {
+                windowManager.removeView(view)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Tooltip view was already removed by the system.", e)
+            }
+        }
+        view.disposeComposition()
+        tooltipView = null
+        tooltipParams = null
     }
 
     /**
@@ -737,5 +1023,9 @@ class BubbleOverlayService :
         private const val BUBBLE_DIAMETER_DP = 56f
         private const val BUBBLE_HALO_DIAMETER_DP = 104f
         private const val EDGE_INSET_DP = 16f
+
+        // Story 1.10 — gap between the bubble's visible edge and the
+        // FlashTooltip pointer. UX-DR4 8 dp spacing token.
+        private const val TOOLTIP_GAP_DP = 8f
     }
 }
