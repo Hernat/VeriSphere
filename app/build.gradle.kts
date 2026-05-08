@@ -104,6 +104,14 @@ android {
 
         // Story 1.9 reads this from BuildConfig.GEMINI_API_KEY.
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKeyForBuildConfig\"")
+
+        // Story 2.2 — toggles the AnchoredDetailPanel between the
+        // edge-anchored override (false) and the stock M3 ModalBottomSheet
+        // fallback (true). V1 default = true (UX spec line 719 Phase 1
+        // acceptance). Flip to false once edge-anchored is validated on
+        // device (architect's call). Per-build-type override is unnecessary;
+        // both debug and release inherit the defaultConfig value.
+        buildConfigField("boolean", "USE_STANDARD_BOTTOM_SHEET", "true")
     }
 
     buildTypes {
