@@ -22,6 +22,13 @@
     <string name="bubble_capturing_content_description">VeriSphere bubble, capturing</string>
     <string name="bubble_thinking_content_description">VeriSphere bubble, verifying</string>
 
+    <!-- Story 2.1 — SourceLinkChip a11y (UX-DR18, NFR12). %1$s = publisher,
+         %2$s = dateYearMonth (YYYY-MM). Strings live here (not in
+         strings_verdict.xml) per architecture line 700 — that file is
+         reserved for verdict-word + verdict contentDescriptions. -->
+    <string name="source_chip_a11y_with_date">Source: %1$s, %2$s, opens in browser</string>
+    <string name="source_chip_a11y_no_date">Source: %1$s, opens in browser</string>
+
     <!-- Story 1.8.5 — VeriSphereAccessibilityService (architecture D5.13, AR27, D2.11; UX-DR17 warm-tone copy) -->
     <string name="accessibility_service_label">VeriSphere</string>
     <string name="accessibility_service_description">VeriSphere capture l\'écran que tu vérifies par long-press. Pas de lecture en arrière-plan, pas d\'actions automatiques. Désactivable à tout moment dans Settings.</string>

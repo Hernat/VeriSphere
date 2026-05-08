@@ -22,8 +22,11 @@ import kotlinx.serialization.Serializable
  *    format — sub-month precision is more noise than signal for fact
  *    checks). Nullable because not every Gemini-grounded source carries
  *    a publication date — e.g. evergreen Wikipedia pages, ABOUT pages,
- *    archived snapshots without preserved metadata. The UI renders
- *    "(date unknown)" when null.
+ *    archived snapshots without preserved metadata. Each rendering
+ *    surface decides how to handle the null case: the
+ *    [`ui.detail.SourceLinkChip`](../ui/detail/SourceLinkChip.kt) drops
+ *    the date suffix entirely (Story 2.1 AC #3); the Story 2.3 detail
+ *    panel may surface a fuller "(date unknown)" affordance there.
  *
  * **JSON wire format** is Kotlin-property-aligned camelCase — no
  * `@SerialName` annotations needed (architecture line 443 + 447).
