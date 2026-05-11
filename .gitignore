@@ -33,6 +33,13 @@ keystore.properties
 /local/
 
 # ──────────────────────────────────────────────
+# JVM crash dumps (Gradle daemon OOM under R8 on Windows JVM 17 —
+# documented Story 1.9 / 2.2 pattern; never useful in the repo)
+# ──────────────────────────────────────────────
+hs_err_pid*.log
+replay_pid*.log
+
+# ──────────────────────────────────────────────
 # OS noise
 # ──────────────────────────────────────────────
 .DS_Store
