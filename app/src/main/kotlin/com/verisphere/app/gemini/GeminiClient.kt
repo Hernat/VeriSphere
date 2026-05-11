@@ -325,6 +325,12 @@ class GeminiClient(
         sourceLinks = verdict.sources,
         ocrText = verdict.ocrText,
         regionalBiasNote = verdict.regionalBiasNote,
+        // Story 3.1 — preserve the model's anti-injection self-report
+        // (FR8) into the persisted record. Story 3.3 reads this to
+        // drive the FailureState.PossibleInjection FlashTooltip variant
+        // (epic AC line 643 — injectionDetected=true stays a Verdict,
+        // not a Failure).
+        injectionDetected = verdict.injectionDetected,
     )
 
     private fun logOutcome(outcome: VerificationOutcome) {

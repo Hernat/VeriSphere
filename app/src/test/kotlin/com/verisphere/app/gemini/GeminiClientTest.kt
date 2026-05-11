@@ -263,6 +263,54 @@ class GeminiClientTest {
         assertTrue("expected a Failure, got $outcome", outcome is Failure)
     }
 
+    @Test
+    fun `injectionDetected true is preserved into SessionRecord without converting to Failure`() = runTest {
+        // Story 3.1 — the model's self-report flag MUST propagate from
+        // GeminiVerdictResponse.injectionDetected → SessionRecord.injectionDetected
+        // without converting the outcome to a Failure. Story 3.3 reads
+        // this from the SessionRecord side to drive the
+        // FailureState.PossibleInjection FlashTooltip variant.
+        val verdictJson = loadFixture("injection_detected.json")
+        server.enqueue(MockResponse().setResponseCode(HTTP_OK).setBody(envelopeFor(verdictJson)))
+        val client = newClient()
+
+        val outcome = client.verify(SAMPLE_FRAME)
+
+        assertTrue(
+            "expected Verdict (not Failure) when injectionDetected=true, got $outcome",
+            outcome is VerificationOutcome.Verdict,
+        )
+        val verdict = outcome as VerificationOutcome.Verdict
+        assertEquals(VerdictLabel.FALSE, verdict.record.verdictLabel)
+        assertTrue(
+            "injectionDetected must propagate from wire to SessionRecord",
+            verdict.record.injectionDetected,
+        )
+    }
+
+    @Test
+    fun `injectionDetected false wire value is preserved into SessionRecord`() = runTest {
+        // Story 3.1 — locks the propagation contract for the false case.
+        // verdict_true.json carries `"injectionDetected": false` explicitly,
+        // so this test exercises the "field present as false → SessionRecord
+        // false" path through GeminiClient.toSessionRecord. The "absent key
+        // → default false" deserialization path is covered by
+        // SessionRecordSerializationTest (which directly tests the
+        // kotlinx.serialization default-value coercion).
+        val verdictJson = loadFixture("verdict_true.json")
+        server.enqueue(MockResponse().setResponseCode(HTTP_OK).setBody(envelopeFor(verdictJson)))
+        val client = newClient()
+
+        val outcome = client.verify(SAMPLE_FRAME)
+
+        assertTrue(outcome is VerificationOutcome.Verdict)
+        assertEquals(
+            "injectionDetected false must propagate from wire to SessionRecord",
+            false,
+            (outcome as VerificationOutcome.Verdict).record.injectionDetected,
+        )
+    }
+
     // ─── helpers ─────────────────────────────────────────────────────
 
     private fun newClient(

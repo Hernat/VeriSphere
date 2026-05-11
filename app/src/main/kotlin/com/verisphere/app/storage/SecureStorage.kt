@@ -79,7 +79,15 @@ class SecureStorage(context: Context) {
         )
     }
 
-    private val json: Json = Json { ignoreUnknownKeys = true }
+    private val json: Json = Json {
+        ignoreUnknownKeys = true
+        // coerceInputValues = true: if a stored record has an explicit JSON
+        // null for a non-nullable field (e.g. injectionDetected added in
+        // Story 3.1), deserialisation coerces null → the field's default
+        // rather than throwing SerializationException and dropping the record.
+        // Matches GeminiClient's Json config (same tolerance posture).
+        coerceInputValues = true
+    }
 
     inline fun <reified T> readJson(key: String): T? = readJsonInternal(key, serializer<T>())
 

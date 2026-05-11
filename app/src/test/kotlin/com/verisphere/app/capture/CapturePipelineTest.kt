@@ -6,16 +6,19 @@ import com.verisphere.app.gemini.VerificationOutcome
 import com.verisphere.app.gemini.VerificationOutcome.Failure
 import com.verisphere.app.storage.RateLimitRepository
 import com.verisphere.app.storage.SessionRecord
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
+import kotlin.time.Duration.Companion.seconds
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.io.IOException
 
@@ -191,20 +194,38 @@ class CapturePipelineTest {
     }
 
     @Test
-    fun `runCapture honours the 20-second timeout`() = runTest {
+    fun `runCapture maps TimeoutCancellationException to Failure Timeout`() = runTest(
+        // CAPTURE_TIMEOUT is currently 60s (smoke-bumped per deferred-work
+        // 2026-05-11; pre-bump was 20s). Because runCapture switches to
+        // `Dispatchers.IO`, the inner `withTimeout` runs on REAL time —
+        // runTest's virtual clock cannot fast-forward it. Bump runTest's
+        // default 60s timeout to 90s so the real-time withTimeout fires
+        // before runTest gives up. Wall-clock cost: ≈ CAPTURE_TIMEOUT
+        // (60s today). Revert this `timeout` parameter when D3.8 is
+        // amended and CAPTURE_TIMEOUT returns to a smaller value.
+        timeout = REAL_TIME_TEST_TIMEOUT,
+    ) {
+        // Story 3.1 — cosmetic mapping fix: when withTimeout cancels the
+        // inner block, the outcome is Failure.Timeout (not Failure.CaptureFailed
+        // as Story 1.8 originally shipped). Locks the contract Story 3.3's
+        // FailureState.Timeout UX variant depends on.
+        val frameExtractorDelayMs =
+            CapturePipeline.CAPTURE_TIMEOUT.inWholeMilliseconds * FRAME_DELAY_MULTIPLIER
         val pipeline = CapturePipeline(
             rateLimitRepository = FakeRateLimitRepository(accept = true),
             hasToken = { true },
-            // The frame extractor suspends WAY past the 20 s budget. The
-            // pipeline's withTimeout MUST fire before it ever returns.
+            // The frame extractor suspends LONGER than CAPTURE_TIMEOUT
+            // (currently 60s smoke-bumped per deferred-work 2026-05-11;
+            // pre-bump was 20s). 2× the timeout guarantees the withTimeout
+            // fires first without tripping virtual-clock arithmetic.
             frameExtractor = {
-                delay(THIRTY_SECONDS_MS)
+                delay(frameExtractorDelayMs)
                 ByteArray(SAMPLE_FRAME_SIZE) { it.toByte() }
             },
             verify = { error("verify must NOT be called after pipeline timeout") },
         )
 
-        // Drive the virtual clock past the pipeline's 20 s budget.
+        // Drive the virtual clock past the pipeline's timeout budget.
         // runTest's StandardTestDispatcher means delays are virtual —
         // advanceTimeBy moves time without sleeping. UNDISPATCHED start
         // ensures the suspending body actually begins executing (and
@@ -212,10 +233,123 @@ class CapturePipelineTest {
         val deferred = async(start = CoroutineStart.UNDISPATCHED) {
             pipeline.runCapture()
         }
-        advanceTimeBy(TWENTY_ONE_SECONDS_MS)
+        advanceTimeBy(CapturePipeline.CAPTURE_TIMEOUT.inWholeMilliseconds + ONE_SECOND_MS)
         val outcome = deferred.await()
 
-        assertEquals(Failure.CaptureFailed, outcome)
+        assertEquals(Failure.Timeout, outcome)
+    }
+
+    @Test
+    fun `pipeline propagates verify Failure Offline unchanged`() = runTest {
+        // Story 3.1 — lock the routing contract: whatever Failure the
+        // verify lambda returns, the pipeline returns it unchanged. No
+        // coercion to CaptureFailed.
+        assertFailurePropagates(Failure.Offline)
+    }
+
+    @Test
+    fun `pipeline propagates verify Failure Timeout unchanged`() = runTest {
+        assertFailurePropagates(Failure.Timeout)
+    }
+
+    @Test
+    fun `pipeline propagates verify Failure ApiQuotaExhausted unchanged`() = runTest {
+        assertFailurePropagates(Failure.ApiQuotaExhausted)
+    }
+
+    @Test
+    fun `pipeline propagates verify Failure MalformedResponse unchanged`() = runTest {
+        assertFailurePropagates(Failure.MalformedResponse)
+    }
+
+    @Test
+    fun `pipeline propagates verify Failure HttpError preserving status code`() = runTest {
+        // The carried int must round-trip — verifies HttpError(code: Int)
+        // is not collapsed to a sentinel.
+        val pipeline = CapturePipeline(
+            rateLimitRepository = FakeRateLimitRepository(accept = true),
+            hasToken = { true },
+            frameExtractor = { ByteArray(SAMPLE_FRAME_SIZE) { it.toByte() } },
+            verify = { Failure.HttpError(HTTP_SERVICE_UNAVAILABLE) },
+        )
+
+        val outcome = pipeline.runCapture()
+
+        assertTrue("expected HttpError but got $outcome", outcome is Failure.HttpError)
+        assertEquals(HTTP_SERVICE_UNAVAILABLE, (outcome as Failure.HttpError).code)
+    }
+
+    @Test
+    fun `pipeline propagates verify Failure DailyLimitReached unchanged`() = runTest {
+        // Symmetric coverage — DailyLimitReached is normally produced
+        // BEFORE verify runs, but if a future refactor surfaced it from
+        // the network layer, the routing contract must still hold.
+        assertFailurePropagates(Failure.DailyLimitReached)
+    }
+
+    @Test
+    fun `pipeline propagates verify Failure PermissionDenied unchanged`() = runTest {
+        assertFailurePropagates(Failure.PermissionDenied)
+    }
+
+    @Test
+    fun `pipeline propagates verify Failure CaptureFailed unchanged`() = runTest {
+        assertFailurePropagates(Failure.CaptureFailed)
+    }
+
+    @Test
+    fun `runCapture re-throws non-timeout CancellationException`() = runTest {
+        // Story 3.1 — preserve structured concurrency. A parent-scope
+        // CancellationException (e.g. service teardown mid-capture) must
+        // propagate so the caller can abandon dispatch; coercing it to
+        // Failure.CaptureFailed would drive the BubbleStateMachine to
+        // Idle via a fake outcome. Mirrors GeminiClient.verify's
+        // CancellationException handling (Story 1.9 patch P4).
+        //
+        // We do NOT use @Test(expected = CancellationException::class) —
+        // runTest participates in structured concurrency and re-routes
+        // child CancellationExceptions through its own scope, so the
+        // JUnit expected-exception mechanism never sees it. Manual try/
+        // catch around an explicit child coroutine isolates the throw.
+        val pipeline = CapturePipeline(
+            rateLimitRepository = FakeRateLimitRepository(accept = true),
+            hasToken = { true },
+            frameExtractor = { throw CancellationException("parent scope cancelled") },
+            verify = { error("verify must NOT be called when capture is cancelled") },
+        )
+
+        var caught: CancellationException? = null
+        val child = async(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                pipeline.runCapture()
+                fail("expected CancellationException to propagate")
+            } catch (e: CancellationException) {
+                caught = e
+            }
+        }
+        child.await()
+
+        assertNotNull("CancellationException must propagate from runCapture", caught)
+        assertEquals("parent scope cancelled", caught?.message)
+    }
+
+    /**
+     * Helper for the symmetric Failure pass-through tests. Locks the
+     * "verify returns X → pipeline returns same X" contract for any
+     * Failure variant that does not carry state (i.e. excludes
+     * Failure.HttpError, which has its own test for code round-trip).
+     */
+    private suspend fun assertFailurePropagates(expected: Failure) {
+        val pipeline = CapturePipeline(
+            rateLimitRepository = FakeRateLimitRepository(accept = true),
+            hasToken = { true },
+            frameExtractor = { ByteArray(SAMPLE_FRAME_SIZE) { it.toByte() } },
+            verify = { expected },
+        )
+
+        val outcome = pipeline.runCapture()
+
+        assertEquals(expected, outcome)
     }
 
     private class FakeRateLimitRepository(private val accept: Boolean) : RateLimitRepository {
@@ -235,8 +369,30 @@ class CapturePipelineTest {
     private companion object {
         private const val FIXED_NOW: Long = 1_700_000_000_000L
         private const val SAMPLE_FRAME_SIZE: Int = 256
-        private const val TWENTY_ONE_SECONDS_MS: Long = 21_000L
-        private const val THIRTY_SECONDS_MS: Long = 30_000L
+
+        /** One-second slack added to the runtime CAPTURE_TIMEOUT in the timeout test. */
+        private const val ONE_SECOND_MS: Long = 1_000L
+
+        /**
+         * Frame-extractor delay multiplier in the timeout test — the
+         * delay must outlast CAPTURE_TIMEOUT but stay small enough to
+         * keep virtual-clock arithmetic well clear of `Long.MAX_VALUE`
+         * (avoids `UncompletedCoroutinesError` from overflow at the
+         * dispatcher level). 2× is generous; CAPTURE_TIMEOUT ≤ 1 day
+         * is the practical bound on which this multiplier is safe.
+         */
+        private const val FRAME_DELAY_MULTIPLIER: Long = 2L
+
+        /** HTTP 503 — used as the carried code in the HttpError round-trip test. */
+        private const val HTTP_SERVICE_UNAVAILABLE: Int = 503
+
+        /**
+         * Real-time test timeout for the single test that exercises
+         * `withTimeout` end-to-end (timeout test). Must exceed
+         * CAPTURE_TIMEOUT (currently 60s) so the real-time withTimeout
+         * fires before runTest gives up.
+         */
+        private val REAL_TIME_TEST_TIMEOUT = 90.seconds
 
         fun sampleSessionRecord(): SessionRecord = SessionRecord(
             id = "test-uuid-1",

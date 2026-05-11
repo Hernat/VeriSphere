@@ -6,6 +6,7 @@ import com.verisphere.app.gemini.VerificationOutcome
 import com.verisphere.app.gemini.VerificationOutcome.Failure
 import com.verisphere.app.storage.RateLimitRepository
 import com.verisphere.app.util.tag
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
@@ -34,10 +35,41 @@ import kotlin.time.Duration.Companion.seconds
  * collaborator, never retained beyond the function's stack frame. On
  * `Verdict` it is GC-eligible the moment [runCapture] returns; on any
  * `Failure` path it is dropped before unwinding. PRD FR6 ("image only
- * to Gemini, nowhere else") is satisfied by construction.
+ * to Gemini, nowhere else") is satisfied by construction. **Closes
+ * architecture validation Gap #2 (AR23 — frame-lifecycle KDoc).**
  *
- * **Lambda-provider seams** ([hasToken], [frameExtractor], [verify],
- * [clock]) — let the production service close over
+ * **Accessibility-revoked seam** (architecture validation Gap #1,
+ * amended post-Sprint-Change-2026-05-07). The original architecture's
+ * "OS-dialog seam" referred to the `MEDIA_PROJECTION` consent dialog
+ * between [com.verisphere.app.bubble.BubbleEvent.LongPressCompleted]
+ * and [com.verisphere.app.bubble.BubbleState.Capturing]; D5.3 was
+ * deprecated in favour of D5.13 ([com.verisphere.app.accessibility.VeriSphereAccessibilityService.takeScreenshot]),
+ * and the OS-permission seam moved to Accessibility activation in
+ * Settings. The functional equivalent now has three branches:
+ *
+ *  1. [com.verisphere.app.bubble.BubbleOverlayService.onLongPress]
+ *     pre-checks `VeriSphereAccessibilityService.instance != null` and
+ *     routes the user to [com.verisphere.app.ui.onboarding.AccessibilityExplanationScreen]
+ *     when revoked — this never invokes the pipeline.
+ *  2. The pipeline's [hasToken] returns `false` → immediate
+ *     [Failure.PermissionDenied] (defensive — same outcome the service
+ *     pre-check would have produced).
+ *  3. TOCTOU: the user disables the service between [hasToken] and
+ *     [frameExtractor] →
+ *     [com.verisphere.app.accessibility.VeriSphereAccessibilityService.ServiceUnboundException]
+ *     → [Failure.PermissionDenied] (Story 1.8.5 patch P4).
+ *
+ * The OS Settings screen is an OS surface, not an app state — there is
+ * intentionally NO distinct [com.verisphere.app.bubble.BubbleState] for
+ * "waiting for Accessibility grant". [Failure.PermissionDenied] is the
+ * typed outcome; [com.verisphere.app.bubble.BubbleStateMachine.reduce]
+ * maps it to [com.verisphere.app.bubble.BubbleState.Idle] (Story 1.10
+ * minimal mapping). Story 3.3 will add the proper `FailureState.*` UX
+ * variants. **Closes architecture validation Gap #1 (AR15 — OS-
+ * permission seam KDoc, amended for Sprint Change 2026-05-07).**
+ *
+ * **Lambda-provider seams** ([hasToken], [frameExtractor], [verify])
+ * — let the production service close over
  * [com.verisphere.app.accessibility.VeriSphereAccessibilityService]
  * (Story 1.8.5) and [com.verisphere.app.gemini.GeminiClient] (Story
  * 1.9) while keeping the pipeline's collaborators JVM-testable. The
@@ -82,10 +114,10 @@ class CapturePipeline(
      * The pipeline runs on [Dispatchers.IO] (architecture D4.4 — repositories
      * use IO internally so call sites don't have to). The 20 s budget is
      * enforced via [withTimeout]; `TimeoutCancellationException` is mapped
-     * to [Failure.CaptureFailed] (the user can retry). The Gemini client's
-     * own `callTimeout = 20 s` is identical to this budget; in practice
-     * the inner OkHttp timeout fires first, but the outer `withTimeout`
-     * is the architectural backstop (D4.5).
+     * to [Failure.Timeout] (Story 3.1 — was `Failure.CaptureFailed` before
+     * the cosmetic mapping fix). The Gemini client's own `callTimeout = 20 s`
+     * is identical to this budget; in practice the inner OkHttp timeout fires
+     * first, but the outer `withTimeout` is the architectural backstop (D4.5).
      */
     @Suppress("TooGenericExceptionCaught") // architecture line 487 — pipeline is the single error funnel
     suspend fun runCapture(): VerificationOutcome = withContext(Dispatchers.IO) {
@@ -94,8 +126,29 @@ class CapturePipeline(
                 runCaptureInner()
             }
         } catch (e: TimeoutCancellationException) {
+            // Story 3.1 — cosmetic mapping fix flagged by Story 2.4 smoke
+            // (deferred-work 2026-05-11). The pipeline's `withTimeout`
+            // budget being exceeded is semantically a Failure.Timeout, not
+            // Failure.CaptureFailed; the latter is reserved for frame-
+            // extraction or programmer errors. Story 3.3 will render the
+            // distinction in the FlashTooltip (`⏱️ TIMEOUT · Try again`
+            // vs the silent-return-to-idle bucket).
+            //
+            // ORDER INVARIANT: this clause MUST precede catch(CancellationException)
+            // below — TimeoutCancellationException is a subclass of
+            // CancellationException. Reversing the order silently collapses
+            // Timeout to CaptureFailed.
             Log.w(TAG, "capture timed out after ${CAPTURE_TIMEOUT.inWholeSeconds}s", e)
-            Failure.CaptureFailed
+            Failure.Timeout
+        } catch (e: CancellationException) {
+            // Story 3.1 — preserve structured concurrency. A non-timeout
+            // CancellationException arises from parent-scope cancellation
+            // (e.g. service teardown during runCaptureAndDispatch); it
+            // must propagate so the caller can abandon dispatch instead
+            // of driving the BubbleStateMachine to Idle via a fake
+            // Failure.CaptureFailed. Same pattern as GeminiClient.verify
+            // (code-review patch P4, Story 1.9).
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "capture failed", e)
             Failure.CaptureFailed
@@ -127,6 +180,16 @@ class CapturePipeline(
             // route the user to AccessibilityExplanationScreen.
             Log.w(TAG, "accessibility service unbound mid-capture — PermissionDenied", e)
             return Failure.PermissionDenied
+        } catch (e: CancellationException) {
+            // Story 3.1 — preserve structured concurrency. Without this
+            // explicit re-throw, the broader `catch (e: Exception)`
+            // below would swallow parent-scope cancellations (and
+            // TimeoutCancellationException) and produce a fake
+            // Failure.CaptureFailed. CancellationException must
+            // propagate through every catch level, not just the
+            // outermost. Mirrors the GeminiClient.verify pattern
+            // (Story 1.9 code-review patch P4).
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "frame extraction failed", e)
             return Failure.CaptureFailed

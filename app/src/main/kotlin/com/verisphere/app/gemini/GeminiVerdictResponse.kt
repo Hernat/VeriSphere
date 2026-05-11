@@ -35,10 +35,12 @@ import kotlinx.serialization.Serializable
  *  - [regionalBiasNote] — optional brief note when the topic has known
  *    regional reporting variance. Null when not applicable.
  *  - [injectionDetected] — model's self-report flag. Defaults to `false`
- *    for forward-compat with Story 7.1's corpus runner. The value
- *    propagates to [`SessionRecord`] only via Story 1.10's downstream
- *    refactor (V1 surfaces injection only via [ocrText] inspection per
- *    PRD User Journey 4b).
+ *    for forward-compat with Story 7.1's corpus runner. Story 3.1
+ *    propagates this field to [`SessionRecord.injectionDetected`][com.verisphere.app.storage.SessionRecord.injectionDetected]
+ *    so Story 3.3 can drive the `FailureState.PossibleInjection`
+ *    FlashTooltip variant from a successfully-persisted record. PRD
+ *    User Journey 4b (anti-injection self-revealing posture) is also
+ *    served by surfacing [ocrText] in the detail panel.
  */
 @Serializable
 internal data class GeminiVerdictResponse(

@@ -155,6 +155,13 @@ class BubbleStateMachine(
             else -> current
         }
 
+        // Story 3.1 — the Accessibility-revoked seam (architecture
+        // validation Gap #1, amended post-Sprint-Change-2026-05-07)
+        // surfaces here as Failure.PermissionDenied. The OS Settings
+        // screen is an OS surface, not a BubbleState; the typed Failure
+        // funnels through the same minimal-mapping branch below. See
+        // [com.verisphere.app.capture.CapturePipeline] class KDoc
+        // for the full three-branch seam documentation.
         is BubbleEvent.VerificationOutcomeReceived -> when (current) {
             BubbleState.Thinking, BubbleState.Capturing -> when (val outcome = event.outcome) {
                 is VerificationOutcome.Verdict -> BubbleState.Verdict(record = outcome.record)
@@ -162,7 +169,10 @@ class BubbleStateMachine(
                 // BubbleState.FailureState.* variants. Until then, every
                 // Failure.* returns silently to Idle so the pipeline
                 // integrity is preserved (no crash, no fake verdict, no
-                // infinite spinner).
+                // infinite spinner). Story 3.1 added the cosmetic
+                // Failure.Timeout mapping in CapturePipeline; the
+                // minimal mapping here is unchanged (Story 3.3 will
+                // diverge per-variant).
                 is VerificationOutcome.Failure -> BubbleState.Idle(faded = false)
             }
             // Outcome arriving in any other state is a bug in the caller;

@@ -33,6 +33,16 @@ import kotlinx.serialization.Serializable
  *  - [regionalBiasNote] — optional brief note when the claim concerns a
  *    topic with known regional reporting variance. Null when not
  *    applicable. Story 2.3 renders only when non-null.
+ *  - [injectionDetected] — Gemini's self-report flag (PRD FR8 anti-
+ *    injection self-revealing posture). Story 3.1 added the field to
+ *    preserve the wire-format signal from [`GeminiVerdictResponse.injectionDetected`][com.verisphere.app.gemini.GeminiVerdictResponse.injectionDetected];
+ *    Story 3.3 reads it to drive the `FailureState.PossibleInjection`
+ *    FlashTooltip variant. Defaults to `false` so historic persisted
+ *    blobs (Story 1.10 records written before Story 3.1) deserialise
+ *    cleanly via kotlinx.serialization's `coerceInputValues = true;
+ *    ignoreUnknownKeys = true` ([`SecureStorage`'s `Json` config][com.verisphere.app.storage.SecureStorage]) —
+ *    no schema-version envelope is required (architecture deferred that
+ *    to V2 per Story 1.4 deferred-work).
  *
  * **Wire format** is camelCase per architecture line 443; field names
  * match `GeminiVerdictResponse` so the mapping in `GeminiClient.verify`
@@ -49,4 +59,5 @@ data class SessionRecord(
     val sourceLinks: List<SourceCitation>,
     val ocrText: String,
     val regionalBiasNote: String? = null,
+    val injectionDetected: Boolean = false,
 )
