@@ -13,6 +13,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.annotation.VisibleForTesting
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -24,15 +25,27 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.verisphere.app.accessibility.VeriSphereAccessibilityService
 import com.verisphere.app.bubble.BubbleOverlayService
+import com.verisphere.app.bubble.EXTRA_BUBBLE_ANCHOR_X_PX
+import com.verisphere.app.bubble.EXTRA_SESSION_ID
+import com.verisphere.app.storage.SessionRecord
+import com.verisphere.app.ui.detail.AnchoredDetailPanel
+import com.verisphere.app.ui.detail.DetailPanelContent
+import com.verisphere.app.ui.detail.buildSourceLinkIntent
 import com.verisphere.app.ui.onboarding.AccessibilityExplanationScreen
 import com.verisphere.app.ui.onboarding.PermissionExplanationScreen
 import com.verisphere.app.ui.theme.VeriSphereTheme
 import com.verisphere.app.util.tag
+import kotlinx.coroutines.launch
 
 /**
  * Single-Activity host for VeriSphere.
@@ -80,22 +93,56 @@ class MainActivity : ComponentActivity() {
     private var overlayGranted: Boolean by mutableStateOf(false)
     private var accessibilityServiceEnabled: Boolean by mutableStateOf(false)
 
+    // Story 2.4 — Detail panel state. The bubble service routes a tap
+    // here via Intent.ACTION_VIEW + EXTRA_SESSION_ID; onCreate /
+    // onNewIntent parse it into pendingDetailSessionId; onResume's
+    // coroutine resolves the id against HistoryRepository and flips
+    // detailRecordToShow into the panel composable.
+    private var detailRecordToShow: SessionRecord? by mutableStateOf(null)
+    private var detailBubbleAnchorXPx: Int by mutableStateOf(0)
+    private var pendingDetailSessionId: String? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         overlayGranted = Settings.canDrawOverlays(this)
         accessibilityServiceEnabled = isAccessibilityServiceEnabled()
+        resolvePendingDetailSession(intent)
 
         setContent {
             VeriSphereTheme {
-                when {
-                    !overlayGranted -> PermissionExplanationScreen(onExit = ::finish)
-                    !accessibilityServiceEnabled -> AccessibilityExplanationScreen(
-                        onActivateClick = ::launchAccessibilitySettings,
-                        onExitClick = ::finish,
-                    )
-                    else -> BootstrapPlaceholder()
+                // Story 2.4 — Box overlay: the existing 3-state gating
+                // UI is the BASE layer; the detail panel mounts ON TOP
+                // when detailRecordToShow is non-null. The panel uses
+                // M3 ModalBottomSheet's stock dismiss semantics (back,
+                // swipe-down, scrim-tap) — no BackHandler override.
+                //
+                // P6 — the panel render is gated on the same permission
+                // predicate used in tryOpenPendingDetailPanel. Without
+                // this guard, a stale detailRecordToShow surviving a
+                // permission revocation would mount the panel on top of
+                // PermissionExplanationScreen / AccessibilityExplanationScreen,
+                // hiding the recovery affordance.
+                Box {
+                    when {
+                        !overlayGranted -> PermissionExplanationScreen(onExit = ::finish)
+                        !accessibilityServiceEnabled -> AccessibilityExplanationScreen(
+                            onActivateClick = ::launchAccessibilitySettings,
+                            onExitClick = ::finish,
+                        )
+                        else -> BootstrapPlaceholder()
+                    }
+                    val record = detailRecordToShow
+                    val panelGateOpen = (BuildConfig.DEBUG && bypassGatesForTest) ||
+                        (overlayGranted && accessibilityServiceEnabled)
+                    if (record != null && panelGateOpen) {
+                        DetailPanelHost(
+                            record = record,
+                            bubbleAnchorXPx = detailBubbleAnchorXPx,
+                            onDismiss = { detailRecordToShow = null },
+                        )
+                    }
                 }
             }
         }
@@ -105,10 +152,80 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         // Story 1.8.5: the bubble service routes here via
         // ACTION_REQUEST_ACCESSIBILITY when a long-press happens but
-        // the accessibility service is off. Update the cached intent
-        // (per the documented onNewIntent contract); onResume's gate
-        // re-check renders the AccessibilityExplanationScreen.
+        // the accessibility service is off. Story 2.4: the same
+        // service also routes here via ACTION_VIEW + EXTRA_SESSION_ID
+        // for the tap-to-expand flow. Update the cached intent (per
+        // the documented onNewIntent contract) and parse the action.
         setIntent(intent)
+        resolvePendingDetailSession(intent)
+    }
+
+    /**
+     * Story 2.4 — Parses an [Intent.ACTION_VIEW] carrying the panel
+     * extras (set by [com.verisphere.app.bubble.buildDetailPanelIntent]).
+     * Other actions (e.g. Story 1.8.5's `ACTION_REQUEST_ACCESSIBILITY`
+     * or the launcher's `ACTION_MAIN`) fall through untouched.
+     *
+     * Also triggers [tryOpenPendingDetailPanel] so a new intent arriving
+     * on an already-RESUMED activity opens the panel without waiting for
+     * a (non-occurring) `onResume` cycle.
+     */
+    private fun resolvePendingDetailSession(intent: Intent?) {
+        if (intent == null) return
+        // TEMP Story 2.4 smoke 2026-05-11 diagnostic. REVERT before merge.
+        Log.d(TAG, "resolvePendingDetailSession action=${intent.action} hasExtra=${intent.hasExtra(EXTRA_SESSION_ID)}")
+        if (intent.action != Intent.ACTION_VIEW) return
+        // P5 — `hasExtra` returns true even when the stored value is
+        // null, so guard on the actual extracted value being non-null
+        // BEFORE assigning either state field. Otherwise a stale
+        // detailBubbleAnchorXPx could outlive a null session id.
+        val sessionId = intent.getStringExtra(EXTRA_SESSION_ID) ?: return
+        pendingDetailSessionId = sessionId
+        detailBubbleAnchorXPx = intent.getIntExtra(EXTRA_BUBBLE_ANCHOR_X_PX, 0)
+        Log.d(TAG, "resolvePendingDetailSession sessionId=$sessionId triggering tryOpenPendingDetailPanel")
+        tryOpenPendingDetailPanel()
+    }
+
+    /**
+     * Story 2.4 — If there is a pending session id and the permission
+     * gates allow it, resolve the [SessionRecord] from
+     * [com.verisphere.app.storage.HistoryRepository.getById] and flip
+     * [detailRecordToShow] into the panel composable. Safe to call from
+     * both `onResume` (initial launch flow) and `resolvePendingDetailSession`
+     * (subsequent `onNewIntent` on a running activity).
+     */
+    private fun tryOpenPendingDetailPanel() {
+        val pending = pendingDetailSessionId ?: run {
+            Log.d(TAG, "tryOpenPendingDetailPanel — no pending id, returning")
+            return
+        }
+        // P2 — `bypassGatesForTest` is read ONLY in BuildConfig.DEBUG.
+        // Release builds always require both gates (production safety
+        // posture). @VisibleForTesting is a lint hint, not access
+        // control; the BuildConfig.DEBUG guard makes the bypass path
+        // structurally unreachable in release APKs.
+        val testBypass = BuildConfig.DEBUG && bypassGatesForTest
+        val gatesOpen = testBypass || (overlayGranted && accessibilityServiceEnabled)
+        // TEMP Story 2.4 smoke 2026-05-11 diagnostic. REVERT before merge.
+        Log.d(TAG, "tryOpenPendingDetailPanel pending=$pending gatesOpen=$gatesOpen overlay=$overlayGranted access=$accessibilityServiceEnabled testBypass=$testBypass")
+        if (!gatesOpen) return
+        // Clear BEFORE launch so a duplicate trigger (e.g. onNewIntent
+        // followed by onResume in the same cycle) does not fire twice.
+        pendingDetailSessionId = null
+        val container = (application as VeriSphereApplication).container
+        lifecycleScope.launch {
+            val record = container.historyRepository.getById(pending)
+            if (record != null) {
+                // TEMP Story 2.4 smoke 2026-05-11 diagnostic. REVERT.
+                Log.d(TAG, "tryOpenPendingDetailPanel record FOUND id=$pending verdictLabel=${record.verdictLabel} — setting detailRecordToShow")
+                detailRecordToShow = record
+            } else {
+                // FIFO eviction edge case (record dropped between
+                // Verdict emission and tap). Silent log; panel does
+                // not open.
+                Log.w(TAG, "getById($pending) returned null — record evicted or never persisted")
+            }
+        }
     }
 
     override fun onResume() {
@@ -118,6 +235,13 @@ class MainActivity : ComponentActivity() {
         // gates so the UI flips between the three states.
         overlayGranted = Settings.canDrawOverlays(this)
         accessibilityServiceEnabled = isAccessibilityServiceEnabled()
+
+        // Story 2.4 — Resolve any pending detail-panel session id. The
+        // lookup hits HistoryRepository's in-memory cache (loaded by the
+        // service-side append BEFORE the Verdict state was emitted —
+        // Story 1.10 persist-before-publish ordering), so the suspend
+        // call returns sub-millisecond.
+        tryOpenPendingDetailPanel()
 
         // Once both gates pass, start the bubble service. Idempotent —
         // `startForegroundService` on an already-running service just
@@ -215,7 +339,92 @@ class MainActivity : ComponentActivity() {
         const val ACTION_REQUEST_ACCESSIBILITY: String =
             "com.verisphere.app.action.REQUEST_ACCESSIBILITY"
 
+        /**
+         * Story 2.4 — Test-only short-circuit for the overlay /
+         * accessibility gates so `MainActivityDetailPanelTest` can
+         * render `DetailPanelHost` without granting `SYSTEM_ALERT_WINDOW`
+         * or activating the accessibility service in the AVD.
+         *
+         * **MUST remain `false` in production.** No production code path
+         * flips it. The test source set sets it via `@Before` and resets
+         * to `false` via `@After`.
+         */
+        @VisibleForTesting
+        var bypassGatesForTest: Boolean = false
+
         private val TAG = tag("MainActivity")
+    }
+}
+
+/**
+ * Story 2.4 P10 — file-level log tag for `DetailPanelHost` failure
+ * paths. Follows the `tag("X")` helper convention used elsewhere in
+ * the project (replaces the original hard-coded `"VS.DetailPanelHost"`
+ * literal flagged by review P10).
+ */
+private val TAG_DETAIL_HOST = tag("DetailPanelHost")
+
+/**
+ * Story 2.4 — Activity-side host for the detail panel. Renders the
+ * stock M3 [AnchoredDetailPanel] populated by Story 2.3's
+ * [DetailPanelContent]. Wraps the source-link `startActivity` call in
+ * typed catches (`ActivityNotFoundException` + `SecurityException`)
+ * to close Story 2.1's deferred-work line 23 (browser missing,
+ * work-profile, locked-down device) and degrade gracefully on a
+ * misbehaving Gemini URL scheme (defer-line-21 — UX-DR1 calm-over-loud).
+ *
+ * Inlined in `MainActivity.kt` per Story 2.4 Critical Dev Note #5: the
+ * host is ~30 LoC + activity-only state; promoting to its own file
+ * would force `internal` exposure of helpers and break the
+ * `ui/detail/` package's "composables only, no hosts" convention.
+ */
+@Composable
+private fun DetailPanelHost(
+    record: SessionRecord,
+    bubbleAnchorXPx: Int,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+    val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx().toInt() }
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    AnchoredDetailPanel(
+        isVisible = true,
+        onDismiss = onDismiss,
+        bubbleAnchorXPx = bubbleAnchorXPx,
+        screenWidthPx = screenWidthPx,
+        isLandscape = isLandscape,
+    ) {
+        DetailPanelContent(
+            record = record,
+            onSourceClick = { citation ->
+                // Story 2.1 deferred-work line 23 close-out: wrap
+                // startActivity in typed catches. Calm-over-loud
+                // (UX-DR1) — no Toast / Snackbar; the panel stays
+                // open and the user can try another source chip.
+                //
+                // P4 fix — narrow from `runCatching` (which swallows
+                // every Throwable including OOM and
+                // CancellationException) to two typed catches that
+                // match the actual failure modes documented in
+                // deferred-work line 23 / line 21. Any other
+                // exception bubbles up — that's a real bug, not a
+                // graceful no-op.
+                try {
+                    context.startActivity(buildSourceLinkIntent(citation.url))
+                } catch (e: ActivityNotFoundException) {
+                    Log.w(TAG_DETAIL_HOST, "Source link could not be opened: ${citation.url}", e)
+                } catch (e: SecurityException) {
+                    // intent:// or content:// scheme from a misbehaving
+                    // Gemini response — defer-line-21 URL-scheme guard
+                    // is the upstream owner; locally we degrade
+                    // gracefully.
+                    Log.w(TAG_DETAIL_HOST, "Source link blocked by SecurityException: ${citation.url}", e)
+                }
+            },
+        )
     }
 }
 

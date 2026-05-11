@@ -25,6 +25,11 @@
     <string name="bubble_verdict_doubtful_content_description">Verdict: doubtful</string>
     <string name="bubble_verdict_non_verifiable_content_description">Verdict: non-verifiable</string>
 
+    <!-- Story 2.4 — FlashTooltip clickable a11y hint (UX-DR18, NFR12).
+         Drives TalkBack's "Double tap to {label}" announcement on the
+         FlashTooltip's clickable Surface (Role.Button). -->
+    <string name="tooltip_expand_action_label">Expand detail</string>
+
     <!-- Story 2.3 — Detail panel section titles + footer (UX-DR17, UX spec § Component Strategy
          AnchoredDetailPanel content order). Verbatim copy; do not reword. -->
     <string name="detail_ocr_title">What was read</string>

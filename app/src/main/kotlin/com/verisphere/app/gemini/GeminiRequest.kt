@@ -55,6 +55,7 @@ internal object GeminiRequest {
      * (escaping is handled by kotlinx.serialization — do NOT manually
      * quote-escape the prompt).
      */
+    @Suppress("UnusedParameter")  // Story 1.9 design conflict — schema temporarily not wired; signature preserved for one-line revert
     fun build(
         systemPrompt: String,
         base64Image: String,
@@ -85,8 +86,51 @@ internal object GeminiRequest {
                 }
             }
             putJsonObject("generationConfig") {
-                put("responseMimeType", "application/json")
-                put("responseJsonSchema", responseSchema)
+                // Story 1.9 design conflict surfaced by Story 2.4
+                // smoke 2026-05-11: Gemini 2.5+ / 3.x rejects
+                // `responseMimeType = "application/json"` +
+                // `responseJsonSchema` when `tools = [googleSearch]`
+                // is present with HTTP 400 "Tool use with a response
+                // mime type: 'application/json' is unsupported". The
+                // architecture D3.3 spec assumed both could coexist;
+                // current Gemini API surface (verified 2026-05-11)
+                // disallows the combination.
+                //
+                // **Smoke unblock** (temporary): drop the structured-
+                // output config; the `system_prompt_v1.txt` already
+                // instructs the model to emit JSON matching
+                // `GeminiVerdictResponse`, and the two-stage parser
+                // in `parseVerdict` tolerates JSON-in-text. Success
+                // rate drops vs schema-enforced mode but the smoke
+                // path is unblocked.
+                //
+                // **Permanent fix** (out of scope, deferred-work):
+                // pick one of:
+                //  (a) two-call approach (image → claim text without
+                //      tools/schema; then claim → verdict with tools
+                //      but no schema → free-text JSON parsed
+                //      defensively);
+                //  (b) function calling instead of grounding (declare
+                //      a `search` function the model calls, we run
+                //      it, re-feed results); the API surface allows
+                //      structured output with function tools but not
+                //      grounding tools;
+                //  (c) drop FR9 (TRUE requires ≥ 2 sources) and rely
+                //      on Gemini's training cutoff for fact-checking.
+                //
+                // `responseSchema` (unused param now) is kept in the
+                // function signature so reverting is a one-line
+                // change once the design conflict is resolved.
+
+                // Story 2.4 — `thinkingConfig.thinkingBudget = 0`
+                // disables the "thinking" step on Gemini 2.5+ / 3.x
+                // models. Without this, vision + structured-output
+                // calls routinely exceed the 20 s D3.8 callTimeout
+                // (verified via `verify HTTP returned in ms` log).
+                // Reference: https://ai.google.dev/gemini-api/docs/thinking
+                putJsonObject("thinkingConfig") {
+                    put("thinkingBudget", 0)
+                }
             }
         }
         return body.toString()

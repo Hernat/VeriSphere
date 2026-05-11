@@ -179,7 +179,14 @@ class GeminiClient(
                     parseVerdict(responseBody)
                 }
                 HTTP_TOO_MANY_REQUESTS -> Failure.ApiQuotaExhausted
-                else -> Failure.HttpError(code)
+                else -> {
+                    // TEMP diagnostic Story 2.4 smoke 2026-05-11 — log
+                    // the HTTP code + first 300 chars of the response
+                    // body so we can identify 400 / 401 / 404 root
+                    // cause. REVERT before merge.
+                    Log.w(TAG, "verify HTTP $code body: ${responseBody.take(300)}")
+                    Failure.HttpError(code)
+                }
             }
         } catch (e: CancellationException) {
             // Code-review patch P4 — preserve structured concurrency.
@@ -239,17 +246,23 @@ class GeminiClient(
 
                 override fun onResponse(call: Call, response: Response) {
                     response.use { resp ->
-                        val payload = if (resp.code == HTTP_OK) {
-                            try {
-                                resp.body?.string().orEmpty()
-                            } catch (e: IOException) {
-                                if (continuation.isActive) {
-                                    continuation.resumeWithException(e)
-                                }
-                                return
+                        // Story 2.4 smoke fix 2026-05-11 — read the
+                        // body on ALL paths (including non-200) so
+                        // HTTP error messages are visible for
+                        // diagnosis. Previously the body was forced
+                        // to "" on non-200 — minor IO saving but
+                        // blinded the error path. Body size on
+                        // Gemini's 4xx is typically < 500 bytes
+                        // (just a JSON error envelope), negligible
+                        // cost. The Story 3.x failure-state UX work
+                        // will benefit from this too.
+                        val payload = try {
+                            resp.body?.string().orEmpty()
+                        } catch (e: IOException) {
+                            if (continuation.isActive) {
+                                continuation.resumeWithException(e)
                             }
-                        } else {
-                            ""
+                            return
                         }
                         if (continuation.isActive) {
                             continuation.resume(resp.code to payload)
@@ -264,6 +277,12 @@ class GeminiClient(
         //   1. Outer envelope: candidates[0].content.parts[0].text → String
         //   2. Inner JSON string: GeminiVerdictResponse
         // Either parse failure → MalformedResponse via the catch in verify().
+        //
+        // TEMP Story 2.4 smoke 2026-05-11 — log first 500 chars of
+        // the raw 200-OK body so we can see what Gemini emits when
+        // structured-output is disabled (smoke unblock — Story 1.9
+        // design conflict). REVERT before merge.
+        Log.d(TAG, "parseVerdict raw body: ${rawBody.take(500)}")
         val envelope = json.decodeFromString(GenerateContentResponse.serializer(), rawBody)
         val verdictJsonText = envelope.candidates.firstOrNull()
             ?.content?.parts?.firstOrNull()?.text
@@ -278,7 +297,22 @@ class GeminiClient(
             Log.w(TAG, "verify failed: MalformedResponse — empty parts[0].text (finishReason=$finishReason)")
             return Failure.MalformedResponse
         }
-        val verdict = json.decodeFromString(GeminiVerdictResponse.serializer(), verdictJsonText)
+        // Story 2.4 smoke 2026-05-11 — strip markdown code fences
+        // before the second-stage decode. With Story 1.9's
+        // structured-output config dropped (design conflict with
+        // tool use, deferred-work), Gemini wraps the JSON in
+        // ```json\n{...}\n``` despite the system prompt asking for
+        // pure JSON. Defensive stripping handles both fenced and
+        // unfenced output so the parser tolerates both regimes —
+        // useful when the spec author picks the permanent fix and
+        // re-enables structured output for the schema path.
+        val cleaned = verdictJsonText
+            .trim()
+            .removePrefix("```json")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+        val verdict = json.decodeFromString(GeminiVerdictResponse.serializer(), cleaned)
         return VerificationOutcome.Verdict(toSessionRecord(verdict))
     }
 
@@ -359,11 +393,22 @@ class GeminiClient(
 
         /**
          * Default Gemini model. `internal` per code-review patch P19.
-         * Architecture D3.3 — Gemini 3 Flash preview is the V1 primary;
-         * the Pro fallback (gemini-3.1-pro-preview) is parameterised by
-         * the constructor.
+         *
+         * **Model choice rationale (2026-05-11 hotfix)** — Switched from
+         * `gemini-3-flash-preview` (architecture D3.3 original) to
+         * `gemini-2.5-flash` (stable GA). The preview model has
+         * non-documented quotas (exhausted the Pixel_9_Pro AVD's RPD
+         * during Story 2.4 smoke); the stable model has documented
+         * **15 RPM / 1500 RPD** on the free tier and proven Search
+         * Grounding + multimodal vision support. Combined with
+         * `thinkingConfig.thinkingBudget = 0` in `GeminiRequest`, this
+         * keeps call latency comfortably under the 20 s D3.8
+         * callTimeout. **Spec-author follow-up**: architecture D3.3
+         * should be amended to pin `gemini-2.5-flash` as the V1 primary
+         * (the `gemini-3.1-pro-preview` fallback remains a constructor
+         * parameter as originally specified).
          */
-        internal const val DEFAULT_MODEL = "gemini-3-flash-preview"
+        internal const val DEFAULT_MODEL = "gemini-2.5-flash"
 
         private const val HTTP_OK = 200
         private const val HTTP_TOO_MANY_REQUESTS = 429

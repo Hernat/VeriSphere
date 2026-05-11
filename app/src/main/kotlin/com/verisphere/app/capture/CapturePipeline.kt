@@ -149,7 +149,7 @@ class CapturePipeline(
          * call. PRD NFR1 targets P95 < 2 s end-to-end; the 20 s ceiling
          * is the backstop matching the OkHttp `callTimeout` (D3.8).
          */
-        val CAPTURE_TIMEOUT = 20.seconds
+        val CAPTURE_TIMEOUT = 60.seconds // TEMP Story 2.4 smoke (was 20s; revert when D3.8 callTimeout amended for Grounding+Vision latency)
 
         private val TAG = tag("CapturePipeline")
     }

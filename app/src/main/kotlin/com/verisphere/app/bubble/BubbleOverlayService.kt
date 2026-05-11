@@ -4,6 +4,8 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
@@ -106,6 +108,58 @@ import kotlin.math.roundToInt
  * NEVER add Service-owned collaborators to `AppContainer` — see the
  * comment at the bottom of `AppContainer.kt`.
  */
+// ─── Story 2.4 — Tap-to-expand Intent contract (file-level for JVM testability) ──────
+
+/**
+ * Story 2.4 — Intent extra carrying the [SessionRecord.id] of the verdict the user
+ * tapped to expand. Resolved activity-side via
+ * [com.verisphere.app.storage.HistoryRepository.getById] (in-memory cache hit, sub-ms
+ * after Story 1.10's persist-before-publish ordering).
+ */
+internal const val EXTRA_SESSION_ID: String = "com.verisphere.app.extra.SESSION_ID"
+
+/**
+ * Story 2.4 — Intent extra carrying the bubble's visible-centre X coordinate (raw
+ * window pixels) at tap time. Consumed by [com.verisphere.app.ui.detail.AnchoredDetailPanel]'s
+ * `computeEmergenceEdge` so the panel slides in from the side nearest the bubble
+ * when `BuildConfig.USE_STANDARD_BOTTOM_SHEET = false`. **V1 ships the flag as
+ * `true`** so this extra is functionally inert until the architect flips it — but
+ * plumbed regardless so the flip is a one-line change.
+ */
+internal const val EXTRA_BUBBLE_ANCHOR_X_PX: String = "com.verisphere.app.extra.BUBBLE_ANCHOR_X_PX"
+
+/**
+ * Story 2.4 — Pure factory for the panel-launch [Intent]. File-level (NOT
+ * inside [BubbleOverlayService]) so the androidTest / JVM-test surface can call
+ * it without instantiating the Service.
+ *
+ * **Flags rationale** — same pattern as Story 1.8.5's
+ * `launchAccessibilityExplanationActivity`:
+ *  - `FLAG_ACTIVITY_NEW_TASK` is required because the caller is a Service (no
+ *    Activity stack to launch into).
+ *  - `FLAG_ACTIVITY_SINGLE_TOP` combines with the manifest's
+ *    `launchMode="singleTop"` to route into `MainActivity.onNewIntent` when the
+ *    activity is already in the task (the typical case post-onboarding).
+ *
+ * **Action rationale** — `Intent.ACTION_VIEW` is idiomatic for "navigate to a
+ * viewable resource" (the resource here is the verdict identified by
+ * [sessionId]). UX-DR14's `Verdict × Tap = Expand detail panel`.
+ *
+ * @param context Source context for the explicit [MainActivity] component.
+ * @param sessionId The [SessionRecord.id] UUID string of the tapped verdict.
+ * @param bubbleAnchorXPx The bubble's visible-centre X coordinate at tap time,
+ *                       in raw window pixels.
+ */
+internal fun buildDetailPanelIntent(
+    context: Context,
+    sessionId: String,
+    bubbleAnchorXPx: Int,
+): Intent = Intent(context, MainActivity::class.java)
+    .setAction(Intent.ACTION_VIEW)
+    .putExtra(EXTRA_SESSION_ID, sessionId)
+    .putExtra(EXTRA_BUBBLE_ANCHOR_X_PX, bubbleAnchorXPx)
+    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+
 class BubbleOverlayService :
     Service(),
     LifecycleOwner,
@@ -127,6 +181,20 @@ class BubbleOverlayService :
     private var overlayAttached: Boolean = false
     private var snapJob: Job? = null
     private var captureJob: Job? = null
+
+    // Story 2.4 smoke 2026-05-11 — snapshot of the most recently
+    // entered Verdict's record. Required because the gesture handler
+    // dispatches `LongPressStarted` on touch-down, which transitions
+    // the state machine Verdict → Pressing BEFORE `onBubbleTap`
+    // fires on release. Without this snapshot, `state.value` is
+    // already Pressing at tap time and `handleVerdictBubbleTap`
+    // misses the verdict.
+    //
+    // Lifecycle: set when state enters Verdict (via state observer);
+    // cleared when state enters Idle. Read by `onBubbleTap` when the
+    // current state is Pressing-immediately-after-Verdict.
+    @Volatile
+    private var lastVerdictRecordForTap: SessionRecord? = null
 
     // Story 1.10 — separate WindowManager view for the FlashTooltip
     // (Critical Dev Note #3 in story file). Kept distinct from the
@@ -539,17 +607,109 @@ class BubbleOverlayService :
     }
 
     /**
-     * Bubble tap callback — Story 1.7 leaves this a true no-op. Story 4.3
-     * wires `Idle × Tap` to "open chronological history" per UX-DR14;
-     * Story 2.4 wires `Verdict × Tap` to "expand detail panel". Story
-     * 1.10 keeps this empty — neither follow-up has shipped.
+     * Bubble tap callback. Story 2.4 wires `Verdict × Tap` to "expand
+     * detail panel" per UX-DR14 by launching [MainActivity] with the
+     * panel-launch Intent ([buildDetailPanelIntent]); Story 4.3 will
+     * wire `Idle × Tap` to "open chronological history".
+     *
+     * **State invariant** (story spec AC #4 + Critical Dev Note #1): the
+     * state machine is read SYNCHRONOUSLY via `state.value` snapshot and
+     * NO [BubbleEvent] is dispatched. The bubble remains in
+     * `Verdict(record, tooltipFaded)` across the panel open / close
+     * cycle — the activity-side dismissal does not call back into the
+     * service.
+     *
      * UserActivity is already emitted on touch-down via
      * [onBubbleUserActivity], so the fade-timer reset is taken care of
      * regardless of how the gesture ends.
      */
-    @Suppress("EmptyFunctionBlock")
     private fun onBubbleTap() {
-        // Intentionally empty — see KDoc.
+        val currentState = bubbleStateMachine.state.value
+        val snapshot = lastVerdictRecordForTap
+        // TEMP Story 2.4 smoke 2026-05-11 diagnostic. REVERT before merge.
+        Log.d(TAG, "onBubbleTap fired — state=${currentState::class.simpleName} snapshot=${snapshot?.id?.take(8)}")
+
+        // Story 2.4 smoke 2026-05-11 — gesture handler dispatches
+        // LongPressStarted on touch-down BEFORE onTap fires, so when
+        // `onTap` runs the state has already transitioned
+        // `Verdict → Pressing`. To honour AC #2 (Verdict × Tap →
+        // panel), we consult the snapshot maintained by the state
+        // observer. If we have a verdict snapshot AND we're in
+        // Pressing (tap-after-Verdict), the user intent was clearly
+        // "open the panel". Dispatch BackToIdle to undo the
+        // touch-down's Pressing transition (the bubble returns to
+        // Idle as if no press happened) and launch the panel.
+        if (currentState is BubbleState.Pressing && snapshot != null) {
+            Log.d(TAG, "onBubbleTap — tap-after-Verdict; opening panel for ${snapshot.id.take(8)}, dispatching BackToIdle")
+            bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
+            launchDetailPanelActivity(snapshot.id)
+            return
+        }
+
+        // Standard path: if state is Verdict (e.g. theoretical race),
+        // route normally via the pure helper.
+        handleVerdictBubbleTap(
+            state = currentState,
+            onLaunchPanel = ::launchDetailPanelActivity,
+        )
+    }
+
+    /**
+     * Story 2.4 — Build and dispatch the panel-launch [Intent].
+     *
+     * Anchor X is computed from the bubble window's current top-left
+     * (`params.x`) plus the halo offset and the half-bubble inset, so
+     * the value is the bubble's VISIBLE-centre in raw window pixels.
+     * If [params] is not yet initialised (defensive — the service
+     * could in theory be torn down between `Verdict` emission and a
+     * very fast tap), anchor X falls back to 0 and the activity-side
+     * `computeEmergenceEdge` resolves to LEFT (harmless because V1
+     * defaults `BuildConfig.USE_STANDARD_BOTTOM_SHEET = true` and the
+     * panel emerges from BOTTOM regardless).
+     *
+     * `startActivity` is wrapped in a try / catch for
+     * [ActivityNotFoundException] — extremely unlikely in practice
+     * (the manifest declares `MainActivity` with `exported="true"` +
+     * MAIN/LAUNCHER filter) but free defensive coverage.
+     */
+    private fun launchDetailPanelActivity(sessionId: String) {
+        val anchorXPx = if (::params.isInitialized) {
+            visibleBubbleCenterXPx()
+        } else {
+            0
+        }
+        val intent = buildDetailPanelIntent(this, sessionId, anchorXPx)
+        // TEMP Story 2.4 smoke 2026-05-11 diagnostic. REVERT before merge.
+        Log.d(TAG, "launchDetailPanelActivity startActivity sessionId=$sessionId anchorXPx=$anchorXPx")
+        try {
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "Cannot launch MainActivity for detail panel — degraded.", e)
+        }
+    }
+
+    /**
+     * Story 2.4 — Returns the bubble's VISIBLE-centre X coordinate in
+     * raw window pixels. Extracted from the per-dp → px math that also
+     * appears in [attachOverlayView] and [onBubbleDragEnd] so the
+     * panel-anchor computation stays in lock-step with the snap
+     * arithmetic.
+     *
+     * P9 — Clamped to `[0, screenWidthPx]` to honour
+     * [com.verisphere.app.ui.detail.computeEmergenceEdge]'s caller
+     * contract ("Clamping is the caller's responsibility"). `params.x`
+     * is normally clamped at rest by the snap arithmetic, but a
+     * tap-during-drag race could theoretically leave a transient
+     * off-screen X; this guard makes the off-screen path impossible
+     * at the API boundary rather than relying on upstream invariants.
+     */
+    private fun visibleBubbleCenterXPx(): Int {
+        val density = resources.displayMetrics.density
+        val bubbleSizePx = (BUBBLE_DIAMETER_DP * density).roundToInt()
+        val haloSizePx = (BUBBLE_HALO_DIAMETER_DP * density).roundToInt()
+        val haloOffsetPx = (haloSizePx - bubbleSizePx) / 2
+        val screenWidthPx = currentWindowSizePx().first
+        return (params.x + haloOffsetPx + bubbleSizePx / 2).coerceIn(0, screenWidthPx)
     }
 
     /**
@@ -652,6 +812,7 @@ class BubbleOverlayService :
         verdict: BubbleState.Verdict,
         bubblePosition: Point,
         density: Float,
+        onTooltipClick: () -> Unit,
     ) {
         val configuration = androidx.compose.ui.platform.LocalConfiguration.current
         val screenWidthPx = (configuration.screenWidthDp * density).roundToInt()
@@ -675,6 +836,7 @@ class BubbleOverlayService :
                     headline = verdict.record.headline,
                     textFaded = verdict.tooltipFaded,
                     pointerDirection = direction,
+                    onClick = onTooltipClick,
                 )
             },
             modifier = Modifier.fillMaxSize(),
@@ -877,16 +1039,29 @@ class BubbleOverlayService :
             // service alive in degraded mode (bubble visible, tooltip
             // missing) — better than a silently-dead observer.
             try {
-                bubbleStateMachine.state
-                    .map { it is BubbleState.Verdict }
-                    .distinctUntilChanged()
-                    .collect { isVerdict ->
-                        if (isVerdict) {
-                            attachTooltipView()
-                        } else {
-                            detachTooltipView()
-                        }
+                bubbleStateMachine.state.collect { state ->
+                    // Story 2.4 smoke fix: snapshot the verdict record
+                    // when we enter Verdict; clear on Idle. Read by
+                    // `onBubbleTap` to launch the panel even when
+                    // state has already transitioned to Pressing on
+                    // touch-down (gesture handler dispatches
+                    // LongPressStarted before tap-vs-long-press is
+                    // resolved).
+                    when (state) {
+                        is BubbleState.Verdict -> lastVerdictRecordForTap = state.record
+                        is BubbleState.Idle -> lastVerdictRecordForTap = null
+                        else -> Unit
                     }
+                    // Tooltip attach/detach: only mount on Verdict;
+                    // detach on any non-Verdict state.
+                    val isVerdict = state is BubbleState.Verdict
+                    val tooltipMounted = tooltipView != null
+                    if (isVerdict && !tooltipMounted) {
+                        attachTooltipView()
+                    } else if (!isVerdict && tooltipMounted) {
+                        detachTooltipView()
+                    }
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Re-throw cancellation so structured concurrency works.
                 throw e
@@ -918,17 +1093,36 @@ class BubbleOverlayService :
                             verdict = verdict,
                             bubblePosition = bubblePosition,
                             density = resources.displayMetrics.density,
+                            onTooltipClick = { launchDetailPanelActivity(verdict.record.id) },
                         )
                     }
                 }
             }
         }
 
-        // FLAG_NOT_TOUCHABLE — Story 1.10 makes the tooltip purely
-        // decorative; every touch passes through to the bubble window
-        // (and beyond, to the source app via FLAG_NOT_TOUCH_MODAL on
-        // the bubble window). Story 2.4 will replace this flag with
-        // hit-test-only-on-tooltip semantics when wiring tap-to-expand.
+        // Story 2.4 smoke 2026-05-11 — DN1 confirmed empirically:
+        // FLAG_NOT_TOUCH_MODAL on a MATCH_PARENT window does NOT
+        // pass-through touches inside the window's bounds (the entire
+        // screen). With the tooltip overlay rendered, ALL screen
+        // touches were consumed by this window, freezing the user
+        // out of every other window. Reverted to FLAG_NOT_TOUCHABLE
+        // (Story 1.10 baseline) — the tooltip is once again purely
+        // decorative. Trade-off: `Verdict × Tap (on tooltip)` (AC #3
+        // / FlashTooltip clickable) is no longer reachable; only
+        // `Verdict × Tap (on bubble)` triggers the panel via the
+        // bubble window's separate WRAP_CONTENT 104dp halo (which
+        // has the correct touch semantics).
+        //
+        // Permanent fix is a Story 1.9 / 2.4-followup design choice:
+        //   (a) Shrink this window to WRAP_CONTENT sized at the
+        //       FlashTooltip's bounding box via a post-composition
+        //       size callback → WindowManager.updateViewLayout.
+        //   (b) Drop the tooltip-tap path from the spec (only the
+        //       bubble triggers the panel).
+        //   (c) Move the FlashTooltip inside the bubble's halo
+        //       window (caps tooltip max-width at 104dp — visually
+        //       restrictive).
+        // Tracked in deferred-work.md (Story 2.4 smoke section).
         val tParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,

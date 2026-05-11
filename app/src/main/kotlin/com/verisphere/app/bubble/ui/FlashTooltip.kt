@@ -5,6 +5,7 @@ import androidx.annotation.ColorRes
 import androidx.annotation.StringRes
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -29,9 +30,11 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.invisibleToUser
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -69,6 +72,18 @@ import kotlin.math.roundToInt
  *  - Verdict word colour follows the UX Step 8 contrast rule — DOUBTFUL
  *    uses dark text on amber (`#F9AB00` text on white fails WCAG AA);
  *    every other verdict uses white text on its semantic background.
+ *
+ * **Story 2.4 tap-to-expand** — when [onClick] is supplied (default
+ * `{}` preserves source compatibility with Story 1.10 callers / previews),
+ * the inner [Surface] is wrapped in `Modifier.clickable` + `Role.Button`
+ * semantics so TalkBack announces "Double tap to expand detail". The
+ * pointer triangle deliberately sits OUTSIDE the clickable Surface — only
+ * the rounded-rectangle background catches taps, matching the visible
+ * affordance.
+ *
+ * @param onClick Invoked on tap. Story 2.4's `BubbleOverlayService`
+ *                wires this to launch the detail panel via
+ *                [com.verisphere.app.bubble.buildDetailPanelIntent].
  */
 @Composable
 fun FlashTooltip(
@@ -76,6 +91,7 @@ fun FlashTooltip(
     headline: String,
     textFaded: Boolean,
     pointerDirection: PointerDirection,
+    onClick: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val configuration = LocalConfiguration.current
@@ -122,6 +138,16 @@ fun FlashTooltip(
             tonalElevation = TONAL_ELEVATION_DP.dp,
             shape = RoundedCornerShape(CORNER_RADIUS_DP.dp),
             color = backgroundColor,
+            // Story 2.4 P3 — clickable Surface with explicit
+            // onClickLabel; without onClickLabel TalkBack speaks the
+            // default "Double tap to activate" hint. With the label
+            // it speaks "Double tap to expand detail" per UX-DR18 +
+            // the merged semantics inherited from the outer Row.
+            modifier = Modifier.clickable(
+                onClickLabel = stringResource(R.string.tooltip_expand_action_label),
+                role = Role.Button,
+                onClick = onClick,
+            ),
         ) {
             Column(
                 modifier = Modifier

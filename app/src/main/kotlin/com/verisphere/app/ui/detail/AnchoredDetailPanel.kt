@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -93,10 +95,13 @@ import com.verisphere.app.ui.theme.VeriSphereTheme
  *                  Forces the BOTTOM emergence path even when
  *                  [BuildConfig.USE_STANDARD_BOTTOM_SHEET] is `false`.
  * @param content Story 2.3's content composable. Receives a [ColumnScope]
- *                  with 16 dp horizontal+vertical padding and 16 dp
- *                  vertical inter-item spacing already applied — the
- *                  content composable drops section composables in
- *                  sequence without re-applying spacing.
+ *                  with 16 dp horizontal+vertical padding, 16 dp vertical
+ *                  inter-item spacing, AND `verticalScroll(rememberScrollState())`
+ *                  already applied (the last added in Story 2.4 to close
+ *                  Story 2.3 deferred-work D1 — long OCR content overflows
+ *                  cleanly via scroll). The content composable drops section
+ *                  composables in sequence without re-applying padding,
+ *                  spacing, or scroll.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -162,9 +167,19 @@ internal fun AnchoredDetailPanelImpl(
         // The anchored slide modifier is a no-op on the standard path: it
         // returns its receiver unchanged so neither animateFloatAsState nor
         // graphicsLayer runs on a path that doesn't need them (review F1+F4).
+        //
+        // Story 2.4 — verticalScroll closes Story 2.3 deferred-work D1
+        // (long OCR content clipped off-screen at fontScale = 1.5f).
+        // Placement: AFTER .padding (so the scroll handle does not extend
+        // past the panel's 16 dp content padding) and BEFORE
+        // .anchoredHorizontalSlide (which is a draw-only graphicsLayer
+        // transform — does not affect layout / hit-testing). The scroll
+        // state resets per open because the parent if (!isVisible) return
+        // unmounts on dismiss — desired UX (user sees the verdict first).
         Column(
             modifier = Modifier
                 .padding(16.dp)
+                .verticalScroll(rememberScrollState())
                 .anchoredHorizontalSlide(takeAnchoredPath, edge),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {

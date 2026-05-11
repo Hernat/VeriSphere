@@ -140,9 +140,17 @@ class AppContainer(private val applicationContext: Context) {
     // (Stories 1.6, 1.8) — owned by the service, not by AppContainer.
 
     private companion object {
+        // TEMP Story 2.4 smoke 2026-05-11: bumped 5/15/20 → 5/45/60.
+        // Verdict + Search Grounding + Vision on Gemini 2.5 Flash
+        // sometimes exceeds 20s wall-clock (verified on Pixel_9_Pro
+        // AVD: 11s success for one image, 20s+ timeout for a 390KB
+        // image). Architecture D3.8 was written before Grounding +
+        // Vision were combined; revisit when spec author confirms
+        // production timeout target. Revert before merge unless
+        // D3.8 is amended.
         private const val CONNECT_TIMEOUT_SECONDS = 5L
-        private const val READ_TIMEOUT_SECONDS = 15L
-        private const val CALL_TIMEOUT_SECONDS = 20L
+        private const val READ_TIMEOUT_SECONDS = 45L
+        private const val CALL_TIMEOUT_SECONDS = 60L
         private const val SYSTEM_PROMPT_ASSET = "system_prompt_v1.txt"
     }
 }
