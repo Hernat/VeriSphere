@@ -1,26 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  VeriSphere verdict-specific strings — Story 1.10 (UX-DR17, UX spec line 784).
-  Kept in a dedicated file (architecture line 700) because the verdict
-  words are the highest-stakes copy in the product. Both files merge
-  into the same R.string.* namespace.
+  VeriSphere verdict-specific strings — Story 1.10 (UX-DR17, UX spec § Copy
+  Guidelines). Kept in a dedicated file (architecture § Resource organisation)
+  because the verdict words are the highest-stakes copy in the product. Both
+  files merge into the same R.string.* namespace.
 
   Verdict labels are uppercase per UX spec; non-verifiable carries a
   hyphen, not an underscore. ContentDescriptions follow the pattern
   "Verdict: {label}" for TalkBack consumption (UX-DR18, NFR12).
 -->
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Story 1.10 — FlashTooltip verdict word strings (UX-DR17, UX spec line 784) -->
+    <!-- Story 1.10 — FlashTooltip verdict word strings (UX-DR17, UX spec § Copy Guidelines).
+         Reused by Story 2.3 DetailPanelContent for the verdict row. -->
     <string name="flash_verdict_true">TRUE</string>
     <string name="flash_verdict_false">FALSE</string>
     <string name="flash_verdict_doubtful">DOUBTFUL</string>
     <string name="flash_verdict_non_verifiable">NON-VERIFIABLE</string>
 
-    <!-- Story 1.10 — Verdict-state contentDescriptions for TalkBack (UX-DR18, NFR12) -->
+    <!-- Story 1.10 — Verdict-state contentDescriptions for TalkBack (UX-DR18, NFR12).
+         Reused by Story 2.3 DetailPanelContent for the verdict-row merged-semantics announcement. -->
     <string name="bubble_verdict_true_content_description">Verdict: true</string>
     <string name="bubble_verdict_false_content_description">Verdict: false</string>
     <string name="bubble_verdict_doubtful_content_description">Verdict: doubtful</string>
     <string name="bubble_verdict_non_verifiable_content_description">Verdict: non-verifiable</string>
+
+    <!-- Story 2.3 — Detail panel section titles + footer (UX-DR17, UX spec § Component Strategy
+         AnchoredDetailPanel content order). Verbatim copy; do not reword. -->
+    <string name="detail_ocr_title">What was read</string>
+    <string name="detail_sources_title">Sources</string>
+    <string name="detail_sources_unavailable">No corroborating sources found.</string>
+    <string name="detail_padlock_copy">No one sees this. Just between us.</string>
+    <string name="detail_powered_by_google">Powered by Google</string>
+    <!-- Reserved for future a11y wiring (V2 i18n pass owns the prefix-binding). -->
+    <string name="detail_regional_bias_a11y_prefix" tools:ignore="UnusedResources">Regional context:</string>
 
 </resources>
