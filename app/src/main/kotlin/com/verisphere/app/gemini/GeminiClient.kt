@@ -7,6 +7,7 @@ import com.verisphere.app.storage.SessionRecord
 import com.verisphere.app.util.tag
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
@@ -44,25 +45,30 @@ import kotlin.coroutines.resumeWithException
  *  - The verdict is mapped to a [SessionRecord] with a fresh UUID v4 +
  *    current `System.currentTimeMillis()`.
  *
- * **No retries in Story 1.9.** `OkHttpClient.retryOnConnectionFailure(false)`
- * is configured by [com.verisphere.app.AppContainer]; Story 3.2 owns the
- * retry policy on 5xx + transient network errors (architecture D3.8).
+ * **Story 3.2 retry policy** (architecture D3.8). On HTTP 5xx or a
+ * transient [IOException] (not timeout-class), the call is retried
+ * exactly once after [RETRY_BACKOFF_MS] ms. No retry on 4xx / 429 /
+ * [SocketTimeoutException] / [InterruptedIOException] / [ConnectException]
+ * / [CancellationException]. `OkHttpClient.retryOnConnectionFailure(false)`
+ * stays — retry is fully manual via [executeCallWithRetryPolicy].
  *
  * **Single error funnel** (architecture line 487). [verify] never throws —
- * every exception is mapped to a [Failure.*] variant per the table in
- * the story file (AC #11):
+ * every exception is mapped to a [Failure.*] variant per the table below.
+ * Retry happens transparently inside [executeCallWithRetryPolicy] before
+ * the exception reaches this mapping layer:
  *
- * | Trigger                                              | Outcome              |
- * |------------------------------------------------------|----------------------|
- * | `UnknownHostException`                               | `Failure.Offline`    |
- * | `SocketTimeoutException`, `InterruptedIOException`   | `Failure.Timeout`    |
- * | `ConnectException` (connect-timeout)                 | `Failure.Timeout`    |
- * | Other `IOException`                                  | `Failure.HttpError(0)` |
- * | HTTP 200 + valid envelope + valid verdict JSON       | `Verdict(record)`    |
- * | HTTP 200 + invalid envelope or malformed verdict JSON| `Failure.MalformedResponse` |
- * | HTTP 429                                             | `Failure.ApiQuotaExhausted` |
- * | HTTP 4xx / 5xx (other)                               | `Failure.HttpError(code)` |
- * | Any other `Exception` (defensive)                    | `Failure.HttpError(0)` |
+ * | Trigger                                              | Outcome              | Retry? |
+ * |------------------------------------------------------|----------------------|--------|
+ * | `UnknownHostException`                               | `Failure.Offline`    | yes (1×) |
+ * | `SocketTimeoutException`, `InterruptedIOException`   | `Failure.Timeout`    | no |
+ * | `ConnectException` (connect-timeout)                 | `Failure.Timeout`    | no |
+ * | Other `IOException`                                  | `Failure.HttpError(0)` | yes (1×) |
+ * | HTTP 200 + valid envelope + valid verdict JSON       | `Verdict(record)`    | — |
+ * | HTTP 200 + invalid envelope or malformed verdict JSON| `Failure.MalformedResponse` | — |
+ * | HTTP 429                                             | `Failure.ApiQuotaExhausted` | no |
+ * | HTTP 5xx                                             | `Failure.HttpError(code)` | yes (1×) |
+ * | HTTP 4xx (other)                                     | `Failure.HttpError(code)` | no |
+ * | Any other `Exception` (defensive)                    | `Failure.HttpError(0)` | no |
  *
  * `CancellationException` is rethrown unchanged so structured concurrency
  * is preserved — parent-scope cancellation propagates instead of being
@@ -161,15 +167,10 @@ class GeminiClient(
                 .post(body.toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
-            // Code-review patch P10 — bridge OkHttp's blocking Call into
-            // a cancellable coroutine. `withContext(IO)` alone does NOT
-            // propagate Kotlin cancellation into `Call.cancel()`; the
-            // socket would stay open until OkHttp's own callTimeout (20 s).
-            // suspendCancellableCoroutine + invokeOnCancellation hooks
-            // the coroutine cancellation back into Call.cancel().
-            val (code, responseBody) = withContext(Dispatchers.IO) {
-                executeCall(httpClient.newCall(request))
-            }
+            // Story 3.2 — retry policy (architecture D3.8). executeCallWithRetryPolicy
+            // retries once on 5xx or transient IOException; all other outcomes
+            // surface directly to the catch chain below.
+            val (code, responseBody) = executeCallWithRetryPolicy(request)
 
             when (code) {
                 HTTP_OK -> withContext(Dispatchers.Default) {
@@ -226,6 +227,62 @@ class GeminiClient(
 
         logOutcome(outcome)
         return outcome
+    }
+
+    /**
+     * Makes one HTTP attempt; if the attempt returns an HTTP 5xx code or
+     * throws a transient [IOException] (not timeout-class), retries exactly
+     * once after [RETRY_BACKOFF_MS] backoff (architecture D3.8).
+     *
+     * Catch ordering follows the subclass-first rule: [CancellationException]
+     * before any [Exception]; timeout-class exceptions ([SocketTimeoutException],
+     * [InterruptedIOException]) before the generic [IOException] catch
+     * (`SocketTimeoutException extends InterruptedIOException extends IOException`
+     * — subclass must precede superclass). [ConnectException] is a **sibling**
+     * of [InterruptedIOException] under [IOException] (NOT in the timeout-class
+     * hierarchy); it appears before the generic [IOException] catch only so it
+     * stays out of the retry branch — its ordering relative to the timeout-class
+     * catches is incidental.
+     *
+     * The second attempt's result is propagated as-is — no further retry —
+     * and any exception it throws surfaces to [verify]'s outer catch chain
+     * for mapping.
+     *
+     * **Body replay invariant.** The [Request]'s body is a `ByteArray.toRequestBody(...)`
+     * built in [verify] — an in-memory replayable source. Each retry creates a
+     * fresh [okhttp3.Call] via `httpClient.newCall(request)` and sends the same
+     * bytes. If a future refactor switches the body to a streaming `okio.Source`
+     * that is consumed on first read, the retry will silently send an empty body;
+     * the retry helper must then clone the body explicitly.
+     */
+    private suspend fun executeCallWithRetryPolicy(request: Request): Pair<Int, String> {
+        val firstResult = try {
+            withContext(Dispatchers.IO) { executeCall(httpClient.newCall(request)) }
+        } catch (e: CancellationException) {
+            throw e   // never retry: preserves structured concurrency
+        } catch (e: SocketTimeoutException) {
+            throw e   // never retry: timeout-class
+        } catch (e: InterruptedIOException) {
+            throw e   // never retry: timeout-class (SocketTimeoutException subclass — must precede IOException)
+        } catch (e: ConnectException) {
+            // Never retry on connection-refused / no-route / network-unreachable.
+            // These map to Failure.Timeout in verify's outer catch chain (Story 1.9
+            // patch P5), but the no-retry decision is independent of the mapping:
+            // a refused/unreachable host won't accept the retry either, and
+            // ConnectException is excluded from the AC #2 retry whitelist.
+            throw e
+        } catch (e: IOException) {
+            // Transient network error (connection reset, UnknownHostException, etc.) — retry once.
+            delay(RETRY_BACKOFF_MS)
+            return withContext(Dispatchers.IO) { executeCall(httpClient.newCall(request)) }
+        }
+
+        return if (firstResult.first in 500..599) {
+            delay(RETRY_BACKOFF_MS)
+            withContext(Dispatchers.IO) { executeCall(httpClient.newCall(request)) }
+        } else {
+            firstResult
+        }
     }
 
     /**
@@ -415,6 +472,9 @@ class GeminiClient(
          * parameter as originally specified).
          */
         internal const val DEFAULT_MODEL = "gemini-2.5-flash"
+
+        /** Backoff before the single retry on 5xx / transient IOException (architecture D3.8). */
+        internal const val RETRY_BACKOFF_MS = 500L
 
         private const val HTTP_OK = 200
         private const val HTTP_TOO_MANY_REQUESTS = 429

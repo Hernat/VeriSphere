@@ -89,12 +89,20 @@ class GeminiClientTest {
 
     @Test
     fun `HTTP 500 maps to Failure HttpError 500`() = runTest {
+        // Story 3.2 — 500 triggers one retry; enqueue a second 500 so the
+        // retry does not hit an empty MockWebServer queue (which would surface
+        // as IOException → HttpError(0), breaking the assertion below).
+        server.enqueue(MockResponse().setResponseCode(HTTP_INTERNAL_ERROR))
         server.enqueue(MockResponse().setResponseCode(HTTP_INTERNAL_ERROR))
         val client = newClient()
 
         val outcome = client.verify(SAMPLE_FRAME)
 
         assertEquals(Failure.HttpError(HTTP_INTERNAL_ERROR), outcome)
+        // Code-review patch P1 — lock the invariant the second enqueue exists for:
+        // a no-retry regression would consume only the first response, hide the
+        // second silently, and the outcome assertion alone would still pass.
+        assertEquals("500 must trigger exactly one retry", 2, server.requestCount)
     }
 
     @Test
@@ -109,6 +117,10 @@ class GeminiClientTest {
         val outcome = client.verify(SAMPLE_FRAME)
 
         assertEquals(Failure.HttpError(HTTP_BAD_REQUEST), outcome)
+        // Story 3.2 code-review patch P3 — 4xx (other than 429) must NOT retry.
+        // The 5xx range check in executeCallWithRetryPolicy is the contract;
+        // any drift that extends retry to 4xx would advance this counter to 2.
+        assertEquals("4xx must not be retried", 1, server.requestCount)
     }
 
     @Test
@@ -197,6 +209,8 @@ class GeminiClientTest {
         val outcome = client.verify(SAMPLE_FRAME)
 
         assertEquals(Failure.Timeout, outcome)
+        // Story 3.2 — SocketTimeoutException must NOT trigger a retry; exactly 1 request.
+        assertEquals("SocketTimeoutException must not be retried", 1, server.requestCount)
     }
 
     @Test
@@ -308,6 +322,131 @@ class GeminiClientTest {
             "injectionDetected false must propagate from wire to SessionRecord",
             false,
             (outcome as VerificationOutcome.Verdict).record.injectionDetected,
+        )
+    }
+
+    // ─── Story 3.2 — retry policy tests ──────────────────────────────
+
+    @Test
+    fun `5xx then 200 returns Verdict after one retry`() = runTest {
+        // Story 3.2 AC #1 — transient 5xx recovered by one retry.
+        // delay(RETRY_BACKOFF_MS) uses virtual time under runTest, so this runs near-instant.
+        server.enqueue(MockResponse().setResponseCode(HTTP_INTERNAL_ERROR))
+        server.enqueue(MockResponse().setResponseCode(HTTP_OK).setBody(envelopeFor(loadFixture("verdict_true.json"))))
+        val client = newClient()
+
+        val outcome = client.verify(SAMPLE_FRAME)
+
+        assertTrue("expected Verdict after retry, got $outcome", outcome is VerificationOutcome.Verdict)
+        assertEquals("server must have received exactly 2 requests", 2, server.requestCount)
+        // Code-review patch P8 — RETRY_BACKOFF_MS value is otherwise functionally
+        // untested: if someone sets it to 0L all retry-success tests still pass.
+        // testScheduler.currentTime tracks virtual time advanced by delay() calls;
+        // the only delay in this code path is the retry backoff. Asserting >= the
+        // configured backoff proves the value is actually honoured at runtime
+        // (the IO work inside withContext(Dispatchers.IO) runs in real time and
+        // does NOT advance testScheduler.currentTime, so the lower bound is tight).
+        assertTrue(
+            "retry backoff did not advance virtual time — RETRY_BACKOFF_MS may have been zeroed",
+            testScheduler.currentTime >= GeminiClient.RETRY_BACKOFF_MS,
+        )
+    }
+
+    @Test
+    fun `5xx twice returns Failure HttpError after one retry`() = runTest {
+        // Story 3.2 AC #2 — exactly one retry; second 5xx propagated as-is.
+        server.enqueue(MockResponse().setResponseCode(HTTP_INTERNAL_ERROR))
+        server.enqueue(MockResponse().setResponseCode(HTTP_INTERNAL_ERROR))
+        val client = newClient()
+
+        val outcome = client.verify(SAMPLE_FRAME)
+
+        assertEquals(Failure.HttpError(HTTP_INTERNAL_ERROR), outcome)
+        assertEquals("server must have received exactly 2 requests", 2, server.requestCount)
+    }
+
+    @Test
+    fun `HTTP 429 maps to Failure ApiQuotaExhausted with no retry`() = runTest {
+        // Story 3.2 AC #3 — 429 is a permanent failure; no retry attempted.
+        server.enqueue(MockResponse().setResponseCode(HTTP_TOO_MANY_REQUESTS))
+        val client = newClient()
+
+        val outcome = client.verify(SAMPLE_FRAME)
+
+        assertEquals(Failure.ApiQuotaExhausted, outcome)
+        assertEquals("429 must not be retried — exactly 1 request expected", 1, server.requestCount)
+    }
+
+    @Test
+    fun `transient IOException then 200 returns Verdict after one retry`() = runTest {
+        // Story 3.2 AC #5 — DISCONNECT_AFTER_REQUEST causes OkHttp to surface an
+        // IOException (connection closed before response is sent). retryOnConnectionFailure(false)
+        // ensures OkHttp does NOT auto-retry; our manual retry in executeCallWithRetryPolicy fires.
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+        server.enqueue(MockResponse().setResponseCode(HTTP_OK).setBody(envelopeFor(loadFixture("verdict_true.json"))))
+        val client = newClient()
+
+        val outcome = client.verify(SAMPLE_FRAME)
+
+        assertTrue("expected Verdict after IOException retry, got $outcome", outcome is VerificationOutcome.Verdict)
+        assertEquals("server must have received exactly 2 requests", 2, server.requestCount)
+    }
+
+    @Test
+    fun `transient IOException twice returns Failure HttpError 0 after one retry`() = runTest {
+        // Code-review patch P2 — coverage gap: AC #3 says a second-attempt
+        // IOException maps to Failure.HttpError(0). Without this test, an
+        // accidental retry-loop regression (e.g. while-loop instead of single
+        // retry) would not be caught — the only signal would be the wall-clock
+        // time of MockWebServer, which virtual-time runTest hides.
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+        val client = newClient()
+
+        val outcome = client.verify(SAMPLE_FRAME)
+
+        assertEquals(
+            "second-attempt IOException must map to Failure.HttpError(0) per AC #3",
+            Failure.HttpError(0),
+            outcome,
+        )
+        assertEquals("server must have received exactly 2 requests (one retry only)", 2, server.requestCount)
+    }
+
+    @Test
+    fun `ConnectException maps to Failure Timeout with no retry`() = runTest {
+        // Code-review patch P6 — catch-ordering invariant: ConnectException
+        // must hit its dedicated `catch (e: ConnectException) { throw e }`
+        // branch in executeCallWithRetryPolicy and propagate to verify's outer
+        // mapping (ConnectException → Failure.Timeout, Story 1.9 patch P5).
+        // If the catch ordering were broken (ConnectException falling through
+        // to the generic IOException retry branch), delay(RETRY_BACKOFF_MS)
+        // would advance virtual time. Asserting testScheduler.currentTime
+        // < RETRY_BACKOFF_MS proves the retry branch was NOT taken.
+        //
+        // Reliably trigger ConnectException by starting a MockWebServer just
+        // to claim a loopback port, then shutting it down — the port is freshly
+        // closed and OkHttp's connect() returns ECONNREFUSED → ConnectException.
+        val closedServer = MockWebServer().apply { start() }
+        val closedPort = closedServer.port
+        closedServer.shutdown()
+        val fastClient = OkHttpClient.Builder()
+            .connectTimeout(FAST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .readTimeout(FAST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .callTimeout(FAST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .retryOnConnectionFailure(false)
+            .build()
+        val client = newClient(
+            httpClient = fastClient,
+            endpointBase = "http://127.0.0.1:$closedPort/v1beta/models",
+        )
+
+        val outcome = client.verify(SAMPLE_FRAME)
+
+        assertEquals("ConnectException must map to Failure.Timeout", Failure.Timeout, outcome)
+        assertTrue(
+            "ConnectException must not be retried — broken catch ordering would advance virtual time via delay()",
+            testScheduler.currentTime < GeminiClient.RETRY_BACKOFF_MS,
         )
     }
 
