@@ -108,10 +108,15 @@ class BubbleStateMachine(
      * Pure state transition function. Side-effect-free, exhaustive on
      * [BubbleEvent], usable from `_state.update { reduce(it, event) }`.
      *
-     * Story 1.10 transition table — see the story file's AC #3 for the
-     * full matrix. The `else -> current` branches are intentional:
-     * stale timers and out-of-grammar events leave the state unchanged
-     * rather than crash.
+     * Story 3.3 — the [BubbleEvent.VerificationOutcomeReceived] branch
+     * now diverges per `Failure.*` variant via [mapFailureToState] (vs
+     * Story 1.10's blanket `Failure.* → Idle` minimal mapping). The
+     * `AutoFadeTimeout`, `LongPressStarted` and `BackToIdle` branches
+     * are also extended to cover every [BubbleState.FailureState.*]
+     * variant uniformly with the existing [BubbleState.Verdict] path.
+     *
+     * The `else -> current` branches are intentional: stale timers and
+     * out-of-grammar events leave the state unchanged rather than crash.
      */
     @Suppress("CyclomaticComplexMethod") // pure reducer — extracting helpers fragments the table across functions
     private fun reduce(current: BubbleState, event: BubbleEvent): BubbleState = when (event) {
@@ -127,17 +132,28 @@ class BubbleStateMachine(
         BubbleEvent.AutoFadeTimeout -> when (current) {
             is BubbleState.Idle -> current.copy(faded = true)
             is BubbleState.Verdict -> current.copy(tooltipFaded = true)
-            // Stale timer from a previous Idle / Verdict period: a
-            // transient state (Pressing / Capturing / Thinking) MUST NOT
-            // be flipped back to faded-Idle by a stale fade timer.
+            // Story 3.3 — five distinct `is` branches because `data class.copy()`
+            // is per-class; sealed-interface smart cast does not unify copy().
+            is BubbleState.FailureState.Offline -> current.copy(tooltipFaded = true)
+            is BubbleState.FailureState.Timeout -> current.copy(tooltipFaded = true)
+            is BubbleState.FailureState.DailyLimit -> current.copy(tooltipFaded = true)
+            is BubbleState.FailureState.QuotaExhausted -> current.copy(tooltipFaded = true)
+            is BubbleState.FailureState.PossibleInjection -> current.copy(tooltipFaded = true)
+            // Stale timer from a previous Idle / Verdict / FailureState
+            // period: a transient state (Pressing / Capturing / Thinking)
+            // MUST NOT be flipped back to faded-Idle by a stale fade timer.
             else -> current
         }
 
         BubbleEvent.LongPressStarted -> when (current) {
-            // UX-DR14: `Idle × Long-press` and `Verdict × Long-press`
-            // both transition to Pressing (the latter is the "re-trigger
-            // capture" path — previous record stays in history).
-            is BubbleState.Idle, is BubbleState.Verdict -> BubbleState.Pressing
+            // UX-DR14: `Idle × Long-press` (initiate) and `Verdict × Long-press`
+            // (re-trigger — previous record stays in history). Story 3.3
+            // extends the re-trigger grammar to every FailureState (the
+            // long-press is the user's recovery affordance for Offline /
+            // Timeout / DailyLimit / QuotaExhausted / PossibleInjection).
+            is BubbleState.Idle,
+            is BubbleState.Verdict,
+            is BubbleState.FailureState -> BubbleState.Pressing
             // Already pressing or in mid-pipeline — ignore the duplicate
             // touch-down (the gesture handler shouldn't fire twice in
             // practice; this is a defensive no-op).
@@ -159,21 +175,29 @@ class BubbleStateMachine(
         // validation Gap #1, amended post-Sprint-Change-2026-05-07)
         // surfaces here as Failure.PermissionDenied. The OS Settings
         // screen is an OS surface, not a BubbleState; the typed Failure
-        // funnels through the same minimal-mapping branch below. See
-        // [com.verisphere.app.capture.CapturePipeline] class KDoc
-        // for the full three-branch seam documentation.
+        // funnels through [mapFailureToState] which routes silent-bucket
+        // failures (PermissionDenied, CaptureFailed, HttpError,
+        // MalformedResponse) to Idle and user-actionable failures
+        // (Offline, Timeout, DailyLimitReached, ApiQuotaExhausted) to
+        // their FailureState variant. See
+        // [com.verisphere.app.capture.CapturePipeline] class KDoc for
+        // the full three-branch seam documentation.
         is BubbleEvent.VerificationOutcomeReceived -> when (current) {
             BubbleState.Thinking, BubbleState.Capturing -> when (val outcome = event.outcome) {
-                is VerificationOutcome.Verdict -> BubbleState.Verdict(record = outcome.record)
-                // Story 1.10 minimal mapping — Story 3.3 (Epic 3) introduces
-                // BubbleState.FailureState.* variants. Until then, every
-                // Failure.* returns silently to Idle so the pipeline
-                // integrity is preserved (no crash, no fake verdict, no
-                // infinite spinner). Story 3.1 added the cosmetic
-                // Failure.Timeout mapping in CapturePipeline; the
-                // minimal mapping here is unchanged (Story 3.3 will
-                // diverge per-variant).
-                is VerificationOutcome.Failure -> BubbleState.Idle(faded = false)
+                is VerificationOutcome.Verdict ->
+                    // Story 3.3 — `injectionDetected = true` is still a
+                    // successful verdict (record was persisted to history
+                    // by BubbleOverlayService.runCaptureAndDispatch BEFORE
+                    // this event fired — Story 1.10 Critical Dev Note #6
+                    // invariant). The reducer redirects to
+                    // FailureState.PossibleInjection so the user sees the
+                    // amber warning flash and can tap to inspect OCR.
+                    if (outcome.record.injectionDetected) {
+                        BubbleState.FailureState.PossibleInjection(record = outcome.record)
+                    } else {
+                        BubbleState.Verdict(record = outcome.record)
+                    }
+                is VerificationOutcome.Failure -> mapFailureToState(outcome)
             }
             // Outcome arriving in any other state is a bug in the caller;
             // drop silently rather than rewrite the state.
@@ -181,12 +205,41 @@ class BubbleStateMachine(
         }
 
         BubbleEvent.BackToIdle -> when (current) {
-            BubbleState.Pressing, is BubbleState.Verdict -> BubbleState.Idle(faded = false)
+            // Story 3.3 — halo-tap / source-app-gesture dismissal from a
+            // FailureState routes to Idle the same way as from Verdict.
+            // The 5 s adaptive-presence fade timer is re-armed by
+            // [handleTransitionSideEffects] via the `enteredIdleNotFaded`
+            // predicate (code-review patch P1 regression coverage from
+            // Story 1.10 applies identically here).
+            BubbleState.Pressing,
+            is BubbleState.Verdict,
+            is BubbleState.FailureState -> BubbleState.Idle(faded = false)
             // BackToIdle from Idle / Capturing / Thinking is a no-op —
             // Capturing / Thinking should run to completion on their own
             // timers; Idle is already idle.
             else -> current
         }
+    }
+
+    /**
+     * Story 3.3 — maps a [VerificationOutcome.Failure] to its corresponding
+     * [BubbleState.FailureState] variant OR to [BubbleState.Idle] for the
+     * silent-bucket failures (UX-DR15 — operator/dev failure categories that
+     * are not user-actionable). Pure function; called from [reduce] only.
+     */
+    private fun mapFailureToState(failure: VerificationOutcome.Failure): BubbleState = when (failure) {
+        VerificationOutcome.Failure.Offline -> BubbleState.FailureState.Offline()
+        VerificationOutcome.Failure.Timeout -> BubbleState.FailureState.Timeout()
+        VerificationOutcome.Failure.DailyLimitReached -> BubbleState.FailureState.DailyLimit()
+        VerificationOutcome.Failure.ApiQuotaExhausted -> BubbleState.FailureState.QuotaExhausted()
+        // Silent buckets — UX-DR15. Returning Idle(faded=false) preserves
+        // the Story 1.10 minimal-mapping contract for these branches AND
+        // keeps the existing adaptive-presence fade re-arm side-effect
+        // (handleTransitionSideEffects `enteredIdleNotFaded`).
+        VerificationOutcome.Failure.PermissionDenied,
+        VerificationOutcome.Failure.CaptureFailed,
+        VerificationOutcome.Failure.MalformedResponse,
+        is VerificationOutcome.Failure.HttpError -> BubbleState.Idle(faded = false)
     }
 
     /**
@@ -257,14 +310,33 @@ class BubbleStateMachine(
             }
         }
 
-        // Verdict-tooltip fade timer (Story 1.10).
-        // Arm on entering Verdict with tooltipFaded=false. Cancel any
-        // in-flight tooltip-fade job before re-arming so back-to-back
-        // verdicts (re-trigger flow: Verdict × Long-press → ... → new
-        // Verdict) reset the timer cleanly.
-        val enteredFreshVerdict = next is BubbleState.Verdict && !next.tooltipFaded &&
-            (previous !is BubbleState.Verdict || previous.record.id != next.record.id)
-        if (enteredFreshVerdict) {
+        // Verdict / FailureState tooltip-fade timer (Story 1.10 + Story 3.3).
+        // Arm on entering a fresh Verdict OR a fresh FailureState with
+        // tooltipFaded=false. The per-record-id check on Verdict and
+        // PossibleInjection prevents back-to-back states with the SAME
+        // record id from re-arming (a tooltipFaded=false → true copy()
+        // re-emission must NOT re-arm the timer). The other four
+        // FailureState variants carry no record, so a simple
+        // type-discriminator check is sufficient.
+        val enteredFreshTooltip = when (next) {
+            is BubbleState.Verdict ->
+                !next.tooltipFaded &&
+                    (previous !is BubbleState.Verdict || previous.record.id != next.record.id)
+            is BubbleState.FailureState.Offline ->
+                !next.tooltipFaded && previous !is BubbleState.FailureState.Offline
+            is BubbleState.FailureState.Timeout ->
+                !next.tooltipFaded && previous !is BubbleState.FailureState.Timeout
+            is BubbleState.FailureState.DailyLimit ->
+                !next.tooltipFaded && previous !is BubbleState.FailureState.DailyLimit
+            is BubbleState.FailureState.QuotaExhausted ->
+                !next.tooltipFaded && previous !is BubbleState.FailureState.QuotaExhausted
+            is BubbleState.FailureState.PossibleInjection ->
+                !next.tooltipFaded &&
+                    (previous !is BubbleState.FailureState.PossibleInjection ||
+                        previous.record.id != next.record.id)
+            else -> false
+        }
+        if (enteredFreshTooltip) {
             tooltipFadeJob?.cancel()
             tooltipFadeJob = coroutineScope.launch {
                 delay(TOOLTIP_FADE_MS)
@@ -282,7 +354,12 @@ class BubbleStateMachine(
             // overwrite the new state.
             suctionJob?.cancel()
         }
-        if (previous is BubbleState.Verdict && next !is BubbleState.Verdict) {
+        // Story 3.3 — extend the tooltip-fade cancel to also fire when
+        // leaving any FailureState (e.g. BackToIdle from FailureState.Offline
+        // must cancel the pending tooltip-fade timer for that variant).
+        val leavingTooltipState = (previous is BubbleState.Verdict && next !is BubbleState.Verdict) ||
+            (previous is BubbleState.FailureState && next !is BubbleState.FailureState)
+        if (leavingTooltipState) {
             tooltipFadeJob?.cancel()
         }
     }

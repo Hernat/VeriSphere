@@ -3,16 +3,14 @@ package com.verisphere.app.bubble
 import com.verisphere.app.storage.SessionRecord
 
 /**
- * Sealed visual states of the bubble overlay (architecture: AR21, D4.3).
+ * Sealed visual states of the bubble overlay (architecture: AR21, D4.3,
+ * line 273).
  *
- * Story 1.10 ships the full happy-path machine: [Idle] → [Pressing] →
+ * Story 1.10 shipped the happy-path machine: [Idle] → [Pressing] →
  * [Capturing] → [Thinking] → [Verdict] (and back to [Idle] on the next
- * user gesture in the source app). The failure-state variants
- * (`FailureState.Offline / Timeout / DailyLimit / QuotaExhausted /
- * PossibleInjection`) are deliberately deferred to Epic 3 (Story 3.3) per
- * architecture line 152 — Story 1.10 maps every `Failure.*` outcome
- * silently back to [Idle] so the happy path can ship cleanly without
- * blocking on Epic 3.
+ * user gesture in the source app). Story 3.3 introduces the
+ * [FailureState] nested sealed sub-hierarchy that drives the
+ * failure-flash UX variants (UX-DR15, UX-DR17, FR25, NFR17).
  *
  * **State semantics:**
  *  - [Idle.faded] — at-rest state with the 5 s adaptive-presence fade
@@ -25,11 +23,28 @@ import com.verisphere.app.storage.SessionRecord
  *    fade-timer pattern).
  *  - [Thinking] — Gemini round-trip in flight. The thin ring loader
  *    rotates around the bubble at 60 fps until [BubbleEvent.VerificationOutcomeReceived].
- *  - [Verdict] — verdict received. The bubble adopts the verdict's
- *    semantic colour (UX Step 8 palette) and the [com.verisphere.app.bubble.ui.FlashTooltip]
- *    renders beside it. After 5–8 s the [tooltipFaded] flag flips via a
- *    second internal timer; the bubble retains its colour until the next
+ *  - [Verdict] — successful verdict received (and `injectionDetected = false`).
+ *    The bubble adopts the verdict's semantic colour (UX Step 8 palette)
+ *    and the [com.verisphere.app.bubble.ui.FlashTooltip] renders beside
+ *    it. After 5–8 s the [Verdict.tooltipFaded] flag flips via a second
+ *    internal timer; the bubble retains its colour until the next
  *    [BubbleEvent.BackToIdle].
+ *  - [FailureState.*] — Story 3.3 failure-flash variants. Five concrete
+ *    variants: [FailureState.Offline] / [FailureState.Timeout] (share the
+ *    `vs_state_offline` palette token), [FailureState.DailyLimit] /
+ *    [FailureState.QuotaExhausted] (share the neutral
+ *    `vs_verdict_non_verifiable` grey), [FailureState.PossibleInjection]
+ *    (carries the persisted [SessionRecord] and uses the doubtful amber
+ *    palette — only failure variant for which a bubble-tap opens the
+ *    detail panel). Each variant carries its own `tooltipFaded` flag and
+ *    shares the verdict-tooltip auto-fade behaviour (UX-DR6).
+ *
+ * **Silent-bucket failures** ([com.verisphere.app.gemini.VerificationOutcome.Failure.PermissionDenied],
+ * [com.verisphere.app.gemini.VerificationOutcome.Failure.CaptureFailed],
+ * [com.verisphere.app.gemini.VerificationOutcome.Failure.HttpError],
+ * [com.verisphere.app.gemini.VerificationOutcome.Failure.MalformedResponse])
+ * stay mapped to [Idle] `faded = false` (no flash) per UX-DR15 — they
+ * are operator/dev categories, not user-actionable.
  */
 sealed interface BubbleState {
 
@@ -94,4 +109,74 @@ sealed interface BubbleState {
         val record: SessionRecord,
         val tooltipFaded: Boolean = false,
     ) : BubbleState
+
+    /**
+     * Story 3.3 — sealed sub-hierarchy of failure-flash variants
+     * (architecture line 273; UX-DR15; UX spec lines 673–680; FR25; NFR17).
+     *
+     * Each variant carries a `tooltipFaded` flag that the reducer flips
+     * via [BubbleEvent.AutoFadeTimeout] after [BubbleStateMachine.TOOLTIP_FADE_MS]
+     * (same auto-fade behaviour as [Verdict.tooltipFaded]). The bubble's
+     * semantic colour is retained on the bubble Surface (via
+     * `bubble/ui/BubbleOverlay.bubbleBackgroundColorFor`) until the next
+     * [BubbleEvent.BackToIdle].
+     */
+    sealed interface FailureState : BubbleState {
+
+        /**
+         * No network connectivity (`Failure.Offline`). Tooltip renders
+         * `OFFLINE` + `Try again when you're online` on the
+         * `vs_state_offline` palette (white-on-dark / dark-on-light per
+         * theme). Tap on bubble is a no-op; the user re-triggers a
+         * capture via the existing long-press grammar.
+         */
+        data class Offline(val tooltipFaded: Boolean = false) : FailureState
+
+        /**
+         * Gemini call exceeded the OkHttp `callTimeout` (`Failure.Timeout`).
+         * Tooltip renders `TIMEOUT` + `Try again` on the
+         * `vs_state_offline` palette (same colour as [Offline] per
+         * UX spec line 678 — both share `bubble_offline`). Tap on bubble
+         * is a no-op.
+         */
+        data class Timeout(val tooltipFaded: Boolean = false) : FailureState
+
+        /**
+         * Per-device daily rate limit exhausted (`Failure.DailyLimitReached`,
+         * 30 captures / UTC-day per AR14). Tooltip renders `DAILY LIMIT` +
+         * `Daily limit reached. Try again tomorrow.` on the neutral
+         * `vs_verdict_non_verifiable` grey. Tap on bubble is a no-op.
+         */
+        data class DailyLimit(val tooltipFaded: Boolean = false) : FailureState
+
+        /**
+         * Gemini API quota exhausted (`Failure.ApiQuotaExhausted`, server-side
+         * 429 / quota envelope — distinct from [DailyLimit]). Tooltip renders
+         * `UNAVAILABLE` + `Service temporarily unavailable` on the neutral
+         * grey palette (same as [DailyLimit] per UX spec line 678). Tap on
+         * bubble is a no-op.
+         */
+        data class QuotaExhausted(val tooltipFaded: Boolean = false) : FailureState
+
+        /**
+         * Successful Gemini verdict whose model self-reported an
+         * injection attempt (`Verdict(record where injectionDetected = true)`,
+         * PRD FR8 + NFR8 self-revealing posture). Tooltip renders
+         * `POSSIBLE INJECTION` + `See OCR text` on the doubtful amber
+         * palette (`vs_verdict_doubtful`).
+         *
+         * **The wrapped [record] WAS persisted to history BEFORE this
+         * state was emitted** (Story 1.10 Critical Dev Note #6 invariant;
+         * Story 3.1's `GeminiClient.toSessionRecord` propagates
+         * `injectionDetected` from `GeminiVerdictResponse`). Tap on the
+         * bubble opens the detail panel via Story 2.4's
+         * `buildDetailPanelIntent(sessionId = record.id, ...)` — the
+         * only [FailureState] variant for which tap-to-expand is wired
+         * (the other failures carry no `SessionRecord`).
+         */
+        data class PossibleInjection(
+            val record: SessionRecord,
+            val tooltipFaded: Boolean = false,
+        ) : FailureState
+    }
 }

@@ -40,7 +40,11 @@ class BubbleStateMachineTest {
     private fun newScope(testScheduler: kotlinx.coroutines.test.TestCoroutineScheduler): TestScope =
         TestScope(StandardTestDispatcher(testScheduler))
 
-    private fun sampleRecord(label: VerdictLabel = VerdictLabel.TRUE, id: String = "rec-1"): SessionRecord =
+    private fun sampleRecord(
+        label: VerdictLabel = VerdictLabel.TRUE,
+        id: String = "rec-1",
+        injectionDetected: Boolean = false,
+    ): SessionRecord =
         SessionRecord(
             id = id,
             timestampMs = 0L,
@@ -50,6 +54,7 @@ class BubbleStateMachineTest {
             sourceLinks = emptyList<SourceCitation>(),
             ocrText = "",
             regionalBiasNote = null,
+            injectionDetected = injectionDetected,
         )
 
     // ----- Story 1.7 contract (preserved) -----------------------------
@@ -232,22 +237,8 @@ class BubbleStateMachineTest {
         assertEquals(false, state.tooltipFaded)
     }
 
-    @Test
-    fun `VerificationOutcomeReceived with Failure transitions Thinking to Idle in story 1_10`() = runTest {
-        val sm = BubbleStateMachine(coroutineScope = newScope(testScheduler))
-
-        sm.onEvent(BubbleEvent.LongPressStarted)
-        sm.onEvent(BubbleEvent.LongPressCompleted)
-        advanceTimeBy(BubbleStateMachine.SUCTION_ANIMATION_MS)
-        advanceUntilIdle()
-
-        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(VerificationOutcome.Failure.Offline))
-        runCurrent()
-
-        // Story 3.3 will introduce BubbleState.FailureState.* variants;
-        // Story 1.10 returns silently to Idle so the happy path can ship.
-        assertEquals(BubbleState.Idle(faded = false), sm.state.value)
-    }
+    // Story 1.10 forward-compat test deleted in Story 3.3 — replaced by
+    // the per-variant Failure → FailureState tests below.
 
     @Test
     fun `Verdict with tooltipFaded false auto-transitions to tooltipFaded true after fade timer`() = runTest {
@@ -360,10 +351,13 @@ class BubbleStateMachineTest {
     }
 
     @Test
-    fun `VerificationOutcome Failure from Thinking re-arms the adaptive-presence fade timer`() = runTest {
-        // Code-review patch P1 regression — Story 1.10 maps Failure.* to
-        // Idle silently; the fade timer must still arm so the bubble
-        // fades 5 s after the silent return.
+    fun `silent-bucket Failure from Thinking re-arms the adaptive-presence fade timer`() = runTest {
+        // Story 3.3 — silent-bucket Failure.* (PermissionDenied,
+        // CaptureFailed, MalformedResponse, HttpError) still map to Idle;
+        // Offline / Timeout / DailyLimit / QuotaExhausted now map to their
+        // FailureState variants. Code-review patch P1 regression — the
+        // fade timer must still arm so the bubble fades 5 s after the
+        // silent return.
         val sm = BubbleStateMachine(coroutineScope = newScope(testScheduler))
 
         sm.onEvent(BubbleEvent.LongPressStarted)
@@ -372,7 +366,7 @@ class BubbleStateMachineTest {
         advanceUntilIdle()
         assertEquals(BubbleState.Thinking, sm.state.value)
 
-        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(VerificationOutcome.Failure.Offline))
+        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(VerificationOutcome.Failure.PermissionDenied))
         runCurrent()
         assertEquals(BubbleState.Idle(faded = false), sm.state.value)
 
@@ -399,5 +393,325 @@ class BubbleStateMachineTest {
         // and then a tooltip-fade would have armed too. With dispose, the
         // state machine is frozen at Capturing (the last state before dispose).
         assertEquals(BubbleState.Capturing, sm.state.value)
+    }
+
+    // ----- Story 3.3 contract -----------------------------------------
+
+    /**
+     * Drives the SM through Idle → Pressing → Capturing → Thinking so
+     * the [BubbleEvent.VerificationOutcomeReceived] dispatch lands in
+     * a Thinking state (the canonical happy-path entry point for
+     * outcome processing).
+     */
+    private fun TestScope.driveToThinking(sm: BubbleStateMachine) {
+        sm.onEvent(BubbleEvent.LongPressStarted)
+        sm.onEvent(BubbleEvent.LongPressCompleted)
+        advanceTimeBy(BubbleStateMachine.SUCTION_ANIMATION_MS)
+        advanceUntilIdle()
+        assertEquals(BubbleState.Thinking, sm.state.value)
+    }
+
+    @Test
+    fun `Failure Offline maps to FailureState Offline`() = runTest {
+        val sm = BubbleStateMachine(coroutineScope = newScope(testScheduler))
+        driveToThinking(sm)
+
+        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(VerificationOutcome.Failure.Offline))
+        runCurrent()
+
+        assertEquals(BubbleState.FailureState.Offline(tooltipFaded = false), sm.state.value)
+    }
+
+    @Test
+    fun `Failure Timeout maps to FailureState Timeout`() = runTest {
+        val sm = BubbleStateMachine(coroutineScope = newScope(testScheduler))
+        driveToThinking(sm)
+
+        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(VerificationOutcome.Failure.Timeout))
+        runCurrent()
+
+        assertEquals(BubbleState.FailureState.Timeout(tooltipFaded = false), sm.state.value)
+    }
+
+    @Test
+    fun `Failure DailyLimitReached maps to FailureState DailyLimit`() = runTest {
+        val sm = BubbleStateMachine(coroutineScope = newScope(testScheduler))
+        driveToThinking(sm)
+
+        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(VerificationOutcome.Failure.DailyLimitReached))
+        runCurrent()
+
+        assertEquals(BubbleState.FailureState.DailyLimit(tooltipFaded = false), sm.state.value)
+    }
+
+    @Test
+    fun `Failure ApiQuotaExhausted maps to FailureState QuotaExhausted`() = runTest {
+        val sm = BubbleStateMachine(coroutineScope = newScope(testScheduler))
+        driveToThinking(sm)
+
+        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(VerificationOutcome.Failure.ApiQuotaExhausted))
+        runCurrent()
+
+        assertEquals(BubbleState.FailureState.QuotaExhausted(tooltipFaded = false), sm.state.value)
+    }
+
+    @Test
+    fun `Verdict with injectionDetected true maps to FailureState PossibleInjection`() = runTest {
+        val sm = BubbleStateMachine(coroutineScope = newScope(testScheduler))
+        driveToThinking(sm)
+
+        val record = sampleRecord(label = VerdictLabel.DOUBTFUL, injectionDetected = true)
+        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(VerificationOutcome.Verdict(record)))
+        runCurrent()
+
+        assertEquals(
+            BubbleState.FailureState.PossibleInjection(record = record, tooltipFaded = false),
+            sm.state.value,
+        )
+    }
+
+    @Test
+    fun `Verdict with injectionDetected false maps to Verdict`() = runTest {
+        // Companion to the previous test — verifies the branching predicate
+        // does NOT incorrectly redirect non-injection verdicts.
+        val sm = BubbleStateMachine(coroutineScope = newScope(testScheduler))
+        driveToThinking(sm)
+
+        val record = sampleRecord(injectionDetected = false)
+        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(VerificationOutcome.Verdict(record)))
+        runCurrent()
+
+        assertEquals(BubbleState.Verdict(record, tooltipFaded = false), sm.state.value)
+    }
+
+    @Test
+    fun `Failure PermissionDenied maps to Idle faded false silent`() = runTest {
+        val sm = BubbleStateMachine(coroutineScope = newScope(testScheduler))
+        driveToThinking(sm)
+
+        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(VerificationOutcome.Failure.PermissionDenied))
+        runCurrent()
+
+        assertEquals(BubbleState.Idle(faded = false), sm.state.value)
+    }
+
+    @Test
+    fun `Failure CaptureFailed maps to Idle faded false silent`() = runTest {
+        val sm = BubbleStateMachine(coroutineScope = newScope(testScheduler))
+        driveToThinking(sm)
+
+        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(VerificationOutcome.Failure.CaptureFailed))
+        runCurrent()
+
+        assertEquals(BubbleState.Idle(faded = false), sm.state.value)
+    }
+
+    @Test
+    fun `Failure HttpError 403 maps to Idle faded false silent`() = runTest {
+        val sm = BubbleStateMachine(coroutineScope = newScope(testScheduler))
+        driveToThinking(sm)
+
+        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(VerificationOutcome.Failure.HttpError(403)))
+        runCurrent()
+
+        assertEquals(BubbleState.Idle(faded = false), sm.state.value)
+    }
+
+    @Test
+    fun `Failure HttpError 500 maps to Idle faded false silent`() = runTest {
+        // 5xx after retry exhaustion (Story 3.2) still routes through the
+        // silent bucket — the user-actionable end-states are Offline /
+        // Timeout / DailyLimit / QuotaExhausted only.
+        val sm = BubbleStateMachine(coroutineScope = newScope(testScheduler))
+        driveToThinking(sm)
+
+        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(VerificationOutcome.Failure.HttpError(500)))
+        runCurrent()
+
+        assertEquals(BubbleState.Idle(faded = false), sm.state.value)
+    }
+
+    @Test
+    fun `Failure MalformedResponse maps to Idle faded false silent`() = runTest {
+        val sm = BubbleStateMachine(coroutineScope = newScope(testScheduler))
+        driveToThinking(sm)
+
+        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(VerificationOutcome.Failure.MalformedResponse))
+        runCurrent()
+
+        assertEquals(BubbleState.Idle(faded = false), sm.state.value)
+    }
+
+    /**
+     * Verifies a FailureState variant's tooltipFaded flag auto-flips to
+     * true after [BubbleStateMachine.TOOLTIP_FADE_MS] — mirrors the
+     * existing Verdict tooltip-fade test (line ~253). The SM must be
+     * driven through the full Idle → Thinking → FailureState transition
+     * so [BubbleStateMachine.handleTransitionSideEffects] arms the
+     * tooltip-fade timer (a constructor-initialized state would skip
+     * the side-effect arming since there's no `previous → next`
+     * transition to diff).
+     *
+     * @param outcome The [VerificationOutcome] to dispatch from Thinking;
+     *                drives the canonical entry into the target
+     *                FailureState variant.
+     * @param expectedEntry The FailureState the reducer should produce
+     *                      immediately after [outcome] is processed.
+     * @param expectedFaded The same FailureState with `tooltipFaded = true`,
+     *                      asserted after the timer fires.
+     */
+    private fun TestScope.assertTooltipFadeTimer(
+        outcome: VerificationOutcome,
+        expectedEntry: BubbleState,
+        expectedFaded: BubbleState,
+    ) {
+        val sm = BubbleStateMachine(coroutineScope = newScope(testScheduler))
+        driveToThinking(sm)
+        sm.onEvent(BubbleEvent.VerificationOutcomeReceived(outcome))
+        runCurrent()
+        assertEquals("Entry state mismatch", expectedEntry, sm.state.value)
+
+        advanceTimeBy(BubbleStateMachine.TOOLTIP_FADE_MS - 1)
+        runCurrent()
+        assertEquals("Tooltip should not yet be faded", expectedEntry, sm.state.value)
+
+        advanceTimeBy(1)
+        advanceUntilIdle()
+        assertEquals("Tooltip should be faded after TOOLTIP_FADE_MS", expectedFaded, sm.state.value)
+    }
+
+    @Test
+    fun `FailureState Offline auto-flips tooltipFaded after TOOLTIP_FADE_MS`() = runTest {
+        assertTooltipFadeTimer(
+            outcome = VerificationOutcome.Failure.Offline,
+            expectedEntry = BubbleState.FailureState.Offline(tooltipFaded = false),
+            expectedFaded = BubbleState.FailureState.Offline(tooltipFaded = true),
+        )
+    }
+
+    @Test
+    fun `FailureState Timeout auto-flips tooltipFaded after TOOLTIP_FADE_MS`() = runTest {
+        assertTooltipFadeTimer(
+            outcome = VerificationOutcome.Failure.Timeout,
+            expectedEntry = BubbleState.FailureState.Timeout(tooltipFaded = false),
+            expectedFaded = BubbleState.FailureState.Timeout(tooltipFaded = true),
+        )
+    }
+
+    @Test
+    fun `FailureState DailyLimit auto-flips tooltipFaded after TOOLTIP_FADE_MS`() = runTest {
+        assertTooltipFadeTimer(
+            outcome = VerificationOutcome.Failure.DailyLimitReached,
+            expectedEntry = BubbleState.FailureState.DailyLimit(tooltipFaded = false),
+            expectedFaded = BubbleState.FailureState.DailyLimit(tooltipFaded = true),
+        )
+    }
+
+    @Test
+    fun `FailureState QuotaExhausted auto-flips tooltipFaded after TOOLTIP_FADE_MS`() = runTest {
+        assertTooltipFadeTimer(
+            outcome = VerificationOutcome.Failure.ApiQuotaExhausted,
+            expectedEntry = BubbleState.FailureState.QuotaExhausted(tooltipFaded = false),
+            expectedFaded = BubbleState.FailureState.QuotaExhausted(tooltipFaded = true),
+        )
+    }
+
+    @Test
+    fun `FailureState PossibleInjection auto-flips tooltipFaded after TOOLTIP_FADE_MS`() = runTest {
+        val record = sampleRecord(label = VerdictLabel.DOUBTFUL, injectionDetected = true)
+        assertTooltipFadeTimer(
+            outcome = VerificationOutcome.Verdict(record),
+            expectedEntry = BubbleState.FailureState.PossibleInjection(record = record, tooltipFaded = false),
+            expectedFaded = BubbleState.FailureState.PossibleInjection(record = record, tooltipFaded = true),
+        )
+    }
+
+    /**
+     * Verifies BackToIdle from a FailureState returns to Idle AND re-arms
+     * the 5 s adaptive-presence fade timer (code-review patch P1
+     * regression coverage from Story 1.10 applied to FailureState).
+     */
+    private fun TestScope.assertBackToIdleRearmsFadeTimer(initialState: BubbleState) {
+        val sm = BubbleStateMachine(
+            initial = initialState,
+            coroutineScope = newScope(testScheduler),
+        )
+
+        sm.onEvent(BubbleEvent.BackToIdle)
+        runCurrent()
+        assertEquals(BubbleState.Idle(faded = false), sm.state.value)
+
+        advanceTimeBy(BubbleStateMachine.FADE_DELAY_MS)
+        advanceUntilIdle()
+        assertEquals(BubbleState.Idle(faded = true), sm.state.value)
+    }
+
+    @Test
+    fun `BackToIdle from FailureState Offline re-arms the adaptive-presence fade timer`() = runTest {
+        assertBackToIdleRearmsFadeTimer(BubbleState.FailureState.Offline())
+    }
+
+    @Test
+    fun `BackToIdle from FailureState Timeout re-arms the adaptive-presence fade timer`() = runTest {
+        assertBackToIdleRearmsFadeTimer(BubbleState.FailureState.Timeout())
+    }
+
+    @Test
+    fun `BackToIdle from FailureState DailyLimit re-arms the adaptive-presence fade timer`() = runTest {
+        assertBackToIdleRearmsFadeTimer(BubbleState.FailureState.DailyLimit())
+    }
+
+    @Test
+    fun `BackToIdle from FailureState QuotaExhausted re-arms the adaptive-presence fade timer`() = runTest {
+        assertBackToIdleRearmsFadeTimer(BubbleState.FailureState.QuotaExhausted())
+    }
+
+    @Test
+    fun `BackToIdle from FailureState PossibleInjection re-arms the adaptive-presence fade timer`() = runTest {
+        val record = sampleRecord(label = VerdictLabel.DOUBTFUL, injectionDetected = true)
+        assertBackToIdleRearmsFadeTimer(BubbleState.FailureState.PossibleInjection(record = record))
+    }
+
+    /**
+     * UX-DR14 row "Failure × Long-press = Re-trigger capture" — every
+     * FailureState transitions to Pressing on LongPressStarted, same as
+     * Verdict.
+     */
+    private fun TestScope.assertLongPressFromFailureGoesToPressing(initialState: BubbleState) {
+        val sm = BubbleStateMachine(
+            initial = initialState,
+            coroutineScope = newScope(testScheduler),
+        )
+
+        sm.onEvent(BubbleEvent.LongPressStarted)
+        runCurrent()
+
+        assertEquals(BubbleState.Pressing, sm.state.value)
+    }
+
+    @Test
+    fun `LongPressStarted from FailureState Offline transitions to Pressing`() = runTest {
+        assertLongPressFromFailureGoesToPressing(BubbleState.FailureState.Offline())
+    }
+
+    @Test
+    fun `LongPressStarted from FailureState Timeout transitions to Pressing`() = runTest {
+        assertLongPressFromFailureGoesToPressing(BubbleState.FailureState.Timeout())
+    }
+
+    @Test
+    fun `LongPressStarted from FailureState DailyLimit transitions to Pressing`() = runTest {
+        assertLongPressFromFailureGoesToPressing(BubbleState.FailureState.DailyLimit())
+    }
+
+    @Test
+    fun `LongPressStarted from FailureState QuotaExhausted transitions to Pressing`() = runTest {
+        assertLongPressFromFailureGoesToPressing(BubbleState.FailureState.QuotaExhausted())
+    }
+
+    @Test
+    fun `LongPressStarted from FailureState PossibleInjection transitions to Pressing`() = runTest {
+        val record = sampleRecord(label = VerdictLabel.DOUBTFUL, injectionDetected = true)
+        assertLongPressFromFailureGoesToPressing(BubbleState.FailureState.PossibleInjection(record = record))
     }
 }

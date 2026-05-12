@@ -180,14 +180,7 @@ class GeminiClient(
                     parseVerdict(responseBody)
                 }
                 HTTP_TOO_MANY_REQUESTS -> Failure.ApiQuotaExhausted
-                else -> {
-                    // TEMP diagnostic Story 2.4 smoke 2026-05-11 — log
-                    // the HTTP code + first 300 chars of the response
-                    // body so we can identify 400 / 401 / 404 root
-                    // cause. REVERT before merge.
-                    Log.w(TAG, "verify HTTP $code body: ${responseBody.take(300)}")
-                    Failure.HttpError(code)
-                }
+                else -> Failure.HttpError(code)
             }
         } catch (e: CancellationException) {
             // Code-review patch P4 — preserve structured concurrency.
@@ -273,11 +266,18 @@ class GeminiClient(
             throw e
         } catch (e: IOException) {
             // Transient network error (connection reset, UnknownHostException, etc.) — retry once.
+            // Story 3.3 — retry telemetry (deferred-work D2 from Story 3.2 review).
+            // Code-review patch P6 — `simpleName` is null for anonymous Throwable
+            // subclasses (e.g. `object : IOException()`); fall back to the qualified
+            // name to keep logs informative.
+            Log.w(TAG, "Retry attempt 2 after IOException: ${e::class.simpleName ?: e::class.java.name}")
             delay(RETRY_BACKOFF_MS)
             return withContext(Dispatchers.IO) { executeCall(httpClient.newCall(request)) }
         }
 
         return if (firstResult.first in 500..599) {
+            // Story 3.3 — retry telemetry (deferred-work D2 from Story 3.2 review).
+            Log.w(TAG, "Retry attempt 2 after HTTP ${firstResult.first}")
             delay(RETRY_BACKOFF_MS)
             withContext(Dispatchers.IO) { executeCall(httpClient.newCall(request)) }
         } else {
@@ -334,12 +334,6 @@ class GeminiClient(
         //   1. Outer envelope: candidates[0].content.parts[0].text → String
         //   2. Inner JSON string: GeminiVerdictResponse
         // Either parse failure → MalformedResponse via the catch in verify().
-        //
-        // TEMP Story 2.4 smoke 2026-05-11 — log first 500 chars of
-        // the raw 200-OK body so we can see what Gemini emits when
-        // structured-output is disabled (smoke unblock — Story 1.9
-        // design conflict). REVERT before merge.
-        Log.d(TAG, "parseVerdict raw body: ${rawBody.take(500)}")
         val envelope = json.decodeFromString(GenerateContentResponse.serializer(), rawBody)
         val verdictJsonText = envelope.candidates.firstOrNull()
             ?.content?.parts?.firstOrNull()?.text

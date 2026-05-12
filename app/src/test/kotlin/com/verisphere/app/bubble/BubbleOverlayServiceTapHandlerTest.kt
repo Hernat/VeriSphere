@@ -8,14 +8,15 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * Story 2.4 — Pure JVM coverage for the `Verdict × Tap` routing
- * extracted into [handleVerdictBubbleTap] (file: `bubble/VerdictTapRouting.kt`).
+ * Story 2.4 (+ Story 3.3) — Pure JVM coverage for tappable-bubble-tap
+ * routing extracted into [handleTappableBubbleTap]
+ * (file: `bubble/TappableBubbleTapRouting.kt`).
  *
- * The helper is a 4-line pure function that reads a [BubbleState]
- * snapshot and invokes `onLaunchPanel(state.record.id)` when (and only
- * when) the state is [BubbleState.Verdict]. Test goal: lock the
- * single-branch contract in a JVM-only test so future regressions are
- * caught without requiring an instrumented test.
+ * The helper reads a [BubbleState] snapshot and invokes
+ * `onLaunchPanel(state.record.id)` when (and only when) the state is
+ * [BubbleState.Verdict] OR [BubbleState.FailureState.PossibleInjection].
+ * Test goal: lock the multi-branch contract in a JVM-only test so
+ * future regressions are caught without requiring an instrumented test.
  *
  * **No Android runtime touched** — the helper has zero Android-API
  * dependencies (no `Intent`, no `Context`, no `Log`). The state types
@@ -34,7 +35,7 @@ class BubbleOverlayServiceTapHandlerTest {
         val record = sampleRecord(id = "verdict-id-42")
         val state = BubbleState.Verdict(record = record)
 
-        handleVerdictBubbleTap(
+        handleTappableBubbleTap(
             state = state,
             onLaunchPanel = { sessionId -> captured = sessionId },
         )
@@ -47,7 +48,7 @@ class BubbleOverlayServiceTapHandlerTest {
         var captured: String? = null
         val state = BubbleState.Idle(faded = false)
 
-        handleVerdictBubbleTap(
+        handleTappableBubbleTap(
             state = state,
             onLaunchPanel = { sessionId -> captured = sessionId },
         )
@@ -59,7 +60,7 @@ class BubbleOverlayServiceTapHandlerTest {
     fun `tap on pressing state does not invoke onLaunchPanel`() {
         var captured: String? = null
 
-        handleVerdictBubbleTap(
+        handleTappableBubbleTap(
             state = BubbleState.Pressing,
             onLaunchPanel = { sessionId -> captured = sessionId },
         )
@@ -71,7 +72,7 @@ class BubbleOverlayServiceTapHandlerTest {
     fun `tap on capturing state does not invoke onLaunchPanel`() {
         var captured: String? = null
 
-        handleVerdictBubbleTap(
+        handleTappableBubbleTap(
             state = BubbleState.Capturing,
             onLaunchPanel = { sessionId -> captured = sessionId },
         )
@@ -83,7 +84,7 @@ class BubbleOverlayServiceTapHandlerTest {
     fun `tap on thinking state does not invoke onLaunchPanel`() {
         var captured: String? = null
 
-        handleVerdictBubbleTap(
+        handleTappableBubbleTap(
             state = BubbleState.Thinking,
             onLaunchPanel = { sessionId -> captured = sessionId },
         )
@@ -95,7 +96,7 @@ class BubbleOverlayServiceTapHandlerTest {
     fun `tap on faded idle state does not invoke onLaunchPanel`() {
         var captured: String? = null
 
-        handleVerdictBubbleTap(
+        handleTappableBubbleTap(
             state = BubbleState.Idle(faded = true),
             onLaunchPanel = { sessionId -> captured = sessionId },
         )
@@ -109,7 +110,7 @@ class BubbleOverlayServiceTapHandlerTest {
         val record = sampleRecord(id = "faded-verdict")
         val state = BubbleState.Verdict(record = record, tooltipFaded = true)
 
-        handleVerdictBubbleTap(
+        handleTappableBubbleTap(
             state = state,
             onLaunchPanel = { sessionId -> captured = sessionId },
         )
@@ -117,7 +118,74 @@ class BubbleOverlayServiceTapHandlerTest {
         assertEquals("faded-verdict", captured)
     }
 
-    private fun sampleRecord(id: String = "fixture-id"): SessionRecord = SessionRecord(
+    // ----- Story 3.3 — FailureState.PossibleInjection branch ----------
+
+    @Test
+    fun `tap on FailureState PossibleInjection invokes onLaunchPanel with record id`() {
+        var captured: String? = null
+        val record = sampleRecord(id = "injection-id-99", injectionDetected = true)
+        val state = BubbleState.FailureState.PossibleInjection(record = record)
+
+        handleTappableBubbleTap(
+            state = state,
+            onLaunchPanel = { sessionId -> captured = sessionId },
+        )
+
+        assertEquals("injection-id-99", captured)
+    }
+
+    @Test
+    fun `tap on FailureState Offline does not invoke onLaunchPanel`() {
+        var captured: String? = null
+
+        handleTappableBubbleTap(
+            state = BubbleState.FailureState.Offline(),
+            onLaunchPanel = { sessionId -> captured = sessionId },
+        )
+
+        assertNull(captured)
+    }
+
+    @Test
+    fun `tap on FailureState Timeout does not invoke onLaunchPanel`() {
+        var captured: String? = null
+
+        handleTappableBubbleTap(
+            state = BubbleState.FailureState.Timeout(),
+            onLaunchPanel = { sessionId -> captured = sessionId },
+        )
+
+        assertNull(captured)
+    }
+
+    @Test
+    fun `tap on FailureState DailyLimit does not invoke onLaunchPanel`() {
+        var captured: String? = null
+
+        handleTappableBubbleTap(
+            state = BubbleState.FailureState.DailyLimit(),
+            onLaunchPanel = { sessionId -> captured = sessionId },
+        )
+
+        assertNull(captured)
+    }
+
+    @Test
+    fun `tap on FailureState QuotaExhausted does not invoke onLaunchPanel`() {
+        var captured: String? = null
+
+        handleTappableBubbleTap(
+            state = BubbleState.FailureState.QuotaExhausted(),
+            onLaunchPanel = { sessionId -> captured = sessionId },
+        )
+
+        assertNull(captured)
+    }
+
+    private fun sampleRecord(
+        id: String = "fixture-id",
+        injectionDetected: Boolean = false,
+    ): SessionRecord = SessionRecord(
         id = id,
         timestampMs = 0L,
         verdictLabel = VerdictLabel.TRUE,
@@ -133,5 +201,6 @@ class BubbleOverlayServiceTapHandlerTest {
         ),
         ocrText = "Sample OCR text",
         regionalBiasNote = null,
+        injectionDetected = injectionDetected,
     )
 }

@@ -43,6 +43,7 @@ import com.verisphere.app.R
 import com.verisphere.app.VeriSphereApplication
 import com.verisphere.app.accessibility.VeriSphereAccessibilityService
 import com.verisphere.app.bubble.ui.BubbleOverlay
+import com.verisphere.app.bubble.ui.FailureFlashTooltip
 import com.verisphere.app.bubble.ui.FlashTooltip
 import com.verisphere.app.bubble.ui.PointerDirection
 import com.verisphere.app.capture.CapturePipeline
@@ -182,19 +183,20 @@ class BubbleOverlayService :
     private var snapJob: Job? = null
     private var captureJob: Job? = null
 
-    // Story 2.4 smoke 2026-05-11 — snapshot of the most recently
-    // entered Verdict's record. Required because the gesture handler
-    // dispatches `LongPressStarted` on touch-down, which transitions
-    // the state machine Verdict → Pressing BEFORE `onBubbleTap`
-    // fires on release. Without this snapshot, `state.value` is
-    // already Pressing at tap time and `handleVerdictBubbleTap`
-    // misses the verdict.
+    // Story 2.4 smoke 2026-05-11 (+ Story 3.3) — snapshot of the most
+    // recently entered tappable state's record. Required because the
+    // gesture handler dispatches `LongPressStarted` on touch-down, which
+    // transitions the state machine Verdict / FailureState.PossibleInjection
+    // → Pressing BEFORE `onBubbleTap` fires on release. Without this
+    // snapshot, `state.value` is already Pressing at tap time and
+    // `handleTappableBubbleTap` misses the record.
     //
-    // Lifecycle: set when state enters Verdict (via state observer);
-    // cleared when state enters Idle. Read by `onBubbleTap` when the
-    // current state is Pressing-immediately-after-Verdict.
+    // Lifecycle: set when state enters Verdict OR
+    // FailureState.PossibleInjection (via state observer); cleared when
+    // state enters Idle. Read by `onBubbleTap` when the current state is
+    // Pressing-immediately-after-tappable.
     @Volatile
-    private var lastVerdictRecordForTap: SessionRecord? = null
+    private var lastTappableRecordForTap: SessionRecord? = null
 
     // Story 1.10 — separate WindowManager view for the FlashTooltip
     // (Critical Dev Note #3 in story file). Kept distinct from the
@@ -601,7 +603,29 @@ class BubbleOverlayService :
      * don't accidentally cancel a Verdict from a halo tap.
      */
     private fun onBubblePressCancelled() {
-        if (bubbleStateMachine.state.value == BubbleState.Pressing) {
+        if (bubbleStateMachine.state.value != BubbleState.Pressing) return
+
+        // Story 3.3 smoke 2026-05-12 — `onTap` and `onPressCancelled` are
+        // two paths emitted by the gesture handler for the same human
+        // gesture ("short press" — released before the 1 s long-press
+        // deadline). The split is purely on elapsed time:
+        //   - elapsed < 200 ms → `onTap`
+        //   - 200 ms ≤ elapsed < 1000 ms → `onPressCancelled`
+        // For a normal human tap on the visible bubble, elapsed often
+        // exceeds 200 ms (finger-down dwell + recognition latency). So
+        // the `tap-after-tappable` logic in `onBubbleTap` (Story 2.4
+        // smoke fix, Story 3.3 patch DN1) ALSO needs to fire here —
+        // otherwise PossibleInjection × Tap (and Verdict × Tap) silently
+        // dismisses the bubble without opening the detail panel when the
+        // user's finger lingers ≥ 200 ms. Snapshot non-null in
+        // `Pressing` means the user was viewing a tappable state
+        // (Verdict / PossibleInjection) before the touch-down — open the
+        // panel for that record before dismissing.
+        val snapshot = lastTappableRecordForTap
+        if (snapshot != null) {
+            bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
+            launchDetailPanelActivity(snapshot.id)
+        } else {
             bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
         }
     }
@@ -625,30 +649,44 @@ class BubbleOverlayService :
      */
     private fun onBubbleTap() {
         val currentState = bubbleStateMachine.state.value
-        val snapshot = lastVerdictRecordForTap
-        // TEMP Story 2.4 smoke 2026-05-11 diagnostic. REVERT before merge.
-        Log.d(TAG, "onBubbleTap fired — state=${currentState::class.simpleName} snapshot=${snapshot?.id?.take(8)}")
+        val snapshot = lastTappableRecordForTap
 
-        // Story 2.4 smoke 2026-05-11 — gesture handler dispatches
-        // LongPressStarted on touch-down BEFORE onTap fires, so when
-        // `onTap` runs the state has already transitioned
-        // `Verdict → Pressing`. To honour AC #2 (Verdict × Tap →
-        // panel), we consult the snapshot maintained by the state
-        // observer. If we have a verdict snapshot AND we're in
-        // Pressing (tap-after-Verdict), the user intent was clearly
-        // "open the panel". Dispatch BackToIdle to undo the
-        // touch-down's Pressing transition (the bubble returns to
-        // Idle as if no press happened) and launch the panel.
+        // Story 2.4 smoke 2026-05-11 (+ Story 3.3) — gesture handler
+        // dispatches LongPressStarted on touch-down BEFORE onTap fires,
+        // so when `onTap` runs the state has already transitioned
+        // Verdict / FailureState.PossibleInjection → Pressing. To honour
+        // AC #2 (tappable × Tap → panel), we consult the snapshot
+        // maintained by the state observer. If we have a tappable
+        // snapshot AND we're in Pressing (tap-after-tappable), the user
+        // intent was clearly "open the panel". Dispatch BackToIdle to
+        // undo the touch-down's Pressing transition (the bubble returns
+        // to Idle as if no press happened) and launch the panel.
         if (currentState is BubbleState.Pressing && snapshot != null) {
-            Log.d(TAG, "onBubbleTap — tap-after-Verdict; opening panel for ${snapshot.id.take(8)}, dispatching BackToIdle")
             bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
             launchDetailPanelActivity(snapshot.id)
             return
         }
 
-        // Standard path: if state is Verdict (e.g. theoretical race),
-        // route normally via the pure helper.
-        handleVerdictBubbleTap(
+        // Code-review patch DN1 (Story 3.3) — touch-down on the bubble
+        // dispatches LongPressStarted (Idle / Verdict / FailureState →
+        // Pressing) BEFORE this tap callback fires. For a non-tappable
+        // source (Idle / FailureState.Offline / Timeout / DailyLimit /
+        // QuotaExhausted), `snapshot == null` so the branch above is
+        // skipped and we land here in `Pressing`. Without an explicit
+        // BackToIdle, the state machine stays in Pressing indefinitely
+        // (LongPressStarted from Pressing is a reducer no-op, so even a
+        // fresh touch-down cannot recover). Dispatching BackToIdle
+        // restores the bubble to Idle — the user's tap dismisses any
+        // failure flash early but recovers cleanly, matching the spec's
+        // "tap is a no-op" intent on the visible end-state.
+        if (currentState is BubbleState.Pressing) {
+            bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
+            return
+        }
+
+        // Standard path: if state is still a tappable variant (e.g.
+        // theoretical race), route normally via the pure helper.
+        handleTappableBubbleTap(
             state = currentState,
             onLaunchPanel = ::launchDetailPanelActivity,
         )
@@ -679,8 +717,6 @@ class BubbleOverlayService :
             0
         }
         val intent = buildDetailPanelIntent(this, sessionId, anchorXPx)
-        // TEMP Story 2.4 smoke 2026-05-11 diagnostic. REVERT before merge.
-        Log.d(TAG, "launchDetailPanelActivity startActivity sessionId=$sessionId anchorXPx=$anchorXPx")
         try {
             startActivity(intent)
         } catch (e: ActivityNotFoundException) {
@@ -714,14 +750,16 @@ class BubbleOverlayService :
 
     /**
      * Halo tap-near-miss callback. UserActivity is already emitted on
-     * touch-down by [onBubbleUserActivity]. Story 1.10: when the state
-     * is [BubbleState.Verdict], a halo tap is a "next user gesture"
+     * touch-down by [onBubbleUserActivity]. Story 1.10 + Story 3.3:
+     * when the state is [BubbleState.Verdict] OR any
+     * [BubbleState.FailureState], a halo tap is a "next user gesture"
      * signal that returns the bubble to Idle (UX-DR6 line 679) — the
      * tooltip text was already faded by the timer; the colour resets
      * here.
      */
     private fun onBubbleTapNearMiss() {
-        if (bubbleStateMachine.state.value is BubbleState.Verdict) {
+        val state = bubbleStateMachine.state.value
+        if (state is BubbleState.Verdict || state is BubbleState.FailureState) {
             bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
         }
     }
@@ -859,6 +897,77 @@ class BubbleOverlayService :
                 // bubble extends past the bottom edge and is clipped
                 // invisibly. Use coerceIn(min, max) instead of
                 // coerceAtLeast(0) so neither axis can exceed the screen.
+                val maxX = (constraints.maxWidth - tooltipPlaceable.width).coerceAtLeast(0)
+                val maxY = (constraints.maxHeight - tooltipPlaceable.height).coerceAtLeast(0)
+                tooltipPlaceable.place(
+                    x = tooltipX.coerceIn(0, maxX),
+                    y = tooltipY.coerceIn(0, maxY),
+                )
+            }
+        }
+    }
+
+    /**
+     * Story 3.3 — sibling Composable to [TooltipOverlayContent] for the
+     * failure-flash path. Identical layout / placement math; renders
+     * [com.verisphere.app.bubble.ui.FailureFlashTooltip] instead of
+     * [com.verisphere.app.bubble.ui.FlashTooltip] and reads the
+     * variant's `tooltipFaded` flag directly off the FailureState
+     * sub-type (every FailureState data class exposes the field).
+     */
+    @androidx.compose.runtime.Composable
+    private fun FailureTooltipOverlayContent(
+        failure: BubbleState.FailureState,
+        bubblePosition: Point,
+        density: Float,
+        onTooltipClick: () -> Unit,
+    ) {
+        val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+        val screenWidthPx = (configuration.screenWidthDp * density).roundToInt()
+        val bubbleSizePx = (BUBBLE_DIAMETER_DP * density).roundToInt()
+        val haloSizePx = (BUBBLE_HALO_DIAMETER_DP * density).roundToInt()
+        val haloOffsetPx = (haloSizePx - bubbleSizePx) / 2
+        val gapPx = (TOOLTIP_GAP_DP * density).roundToInt()
+
+        val visibleBubbleX = bubblePosition.x + haloOffsetPx
+        val visibleBubbleY = bubblePosition.y + haloOffsetPx
+        val direction = if (visibleBubbleX + bubbleSizePx / 2 < screenWidthPx / 2) {
+            PointerDirection.LEFT
+        } else {
+            PointerDirection.RIGHT
+        }
+
+        val textFaded = when (failure) {
+            is BubbleState.FailureState.Offline -> failure.tooltipFaded
+            is BubbleState.FailureState.Timeout -> failure.tooltipFaded
+            is BubbleState.FailureState.DailyLimit -> failure.tooltipFaded
+            is BubbleState.FailureState.QuotaExhausted -> failure.tooltipFaded
+            is BubbleState.FailureState.PossibleInjection -> failure.tooltipFaded
+        }
+
+        androidx.compose.ui.layout.Layout(
+            content = {
+                FailureFlashTooltip(
+                    failure = failure,
+                    textFaded = textFaded,
+                    pointerDirection = direction,
+                    onClick = onTooltipClick,
+                )
+            },
+            modifier = Modifier.fillMaxSize(),
+        ) { measurables, constraints ->
+            val tooltipPlaceable = measurables[0].measure(
+                androidx.compose.ui.unit.Constraints(
+                    maxWidth = (constraints.maxWidth * 3) / 4, // 75 % of screen, UX-DR4
+                ),
+            )
+            layout(constraints.maxWidth, constraints.maxHeight) {
+                val tooltipX = if (direction == PointerDirection.LEFT) {
+                    visibleBubbleX + bubbleSizePx + gapPx
+                } else {
+                    visibleBubbleX - tooltipPlaceable.width - gapPx
+                }
+                val tooltipY = visibleBubbleY + bubbleSizePx / 2 - tooltipPlaceable.height / 2
                 val maxX = (constraints.maxWidth - tooltipPlaceable.width).coerceAtLeast(0)
                 val maxY = (constraints.maxHeight - tooltipPlaceable.height).coerceAtLeast(0)
                 tooltipPlaceable.place(
@@ -1040,25 +1149,56 @@ class BubbleOverlayService :
             // missing) — better than a silently-dead observer.
             try {
                 bubbleStateMachine.state.collect { state ->
-                    // Story 2.4 smoke fix: snapshot the verdict record
-                    // when we enter Verdict; clear on Idle. Read by
-                    // `onBubbleTap` to launch the panel even when
-                    // state has already transitioned to Pressing on
-                    // touch-down (gesture handler dispatches
+                    // Story 2.4 smoke fix (+ Story 3.3): snapshot the
+                    // record when we enter a tappable state (Verdict OR
+                    // FailureState.PossibleInjection); clear on Idle.
+                    // Read by `onBubbleTap` to launch the panel even
+                    // when state has already transitioned to Pressing
+                    // on touch-down (gesture handler dispatches
                     // LongPressStarted before tap-vs-long-press is
-                    // resolved).
+                    // resolved). Other FailureState variants do NOT set
+                    // the snapshot — their bubble tap is a no-op
+                    // (no SessionRecord to expand).
                     when (state) {
-                        is BubbleState.Verdict -> lastVerdictRecordForTap = state.record
-                        is BubbleState.Idle -> lastVerdictRecordForTap = null
-                        else -> Unit
+                        is BubbleState.Verdict -> lastTappableRecordForTap = state.record
+                        is BubbleState.FailureState.PossibleInjection ->
+                            lastTappableRecordForTap = state.record
+                        // Code-review patch P1 (Story 3.3) — clear the
+                        // snapshot when entering a non-tappable, non-
+                        // transient state (Idle / Capturing / Thinking /
+                        // non-PossibleInjection FailureState). This closes
+                        // the `PossibleInjection(A) → re-trigger →
+                        // Failure.Offline` stale-snapshot gap where a
+                        // subsequent tap would have opened the panel for
+                        // the obsolete record.
+                        //
+                        // P1 followup (smoke) — `BubbleState.Pressing` is
+                        // INTENTIONALLY excluded from the clear path: it
+                        // is the transient touch-down phase dispatched
+                        // synchronously by the gesture handler BEFORE the
+                        // tap-vs-long-press deadline resolves. The
+                        // `onBubbleTap` snapshot-replay path (Story 2.4
+                        // smoke fix) reads `lastTappableRecordForTap`
+                        // during `Pressing` to honour
+                        // `Verdict × Tap → panel` /
+                        // `PossibleInjection × Tap → panel` (AC #4).
+                        // Clearing on Pressing would force every short-tap
+                        // on a tappable variant to short-circuit through
+                        // DN1's `Pressing && snapshot=null → BackToIdle`
+                        // fallback and never reach `launchDetailPanelActivity`.
+                        is BubbleState.Idle,
+                        BubbleState.Capturing,
+                        BubbleState.Thinking,
+                        is BubbleState.FailureState -> lastTappableRecordForTap = null
+                        BubbleState.Pressing -> Unit
                     }
-                    // Tooltip attach/detach: only mount on Verdict;
-                    // detach on any non-Verdict state.
-                    val isVerdict = state is BubbleState.Verdict
+                    // Story 3.3 — tooltip attach/detach: mount on Verdict
+                    // OR any FailureState; detach on any other state.
+                    val isTooltipState = state is BubbleState.Verdict || state is BubbleState.FailureState
                     val tooltipMounted = tooltipView != null
-                    if (isVerdict && !tooltipMounted) {
+                    if (isTooltipState && !tooltipMounted) {
                         attachTooltipView()
-                    } else if (!isVerdict && tooltipMounted) {
+                    } else if (!isTooltipState && tooltipMounted) {
                         detachTooltipView()
                     }
                 }
@@ -1086,15 +1226,28 @@ class BubbleOverlayService :
             setContent {
                 VeriSphereTheme {
                     val state by bubbleStateMachine.state.collectAsState()
-                    val verdict = state as? BubbleState.Verdict
-                    if (verdict != null) {
-                        val bubblePosition by bubblePositionFlow.collectAsState()
-                        TooltipOverlayContent(
-                            verdict = verdict,
+                    val bubblePosition by bubblePositionFlow.collectAsState()
+                    when (val s = state) {
+                        is BubbleState.Verdict -> TooltipOverlayContent(
+                            verdict = s,
                             bubblePosition = bubblePosition,
                             density = resources.displayMetrics.density,
-                            onTooltipClick = { launchDetailPanelActivity(verdict.record.id) },
+                            onTooltipClick = { launchDetailPanelActivity(s.record.id) },
                         )
+                        is BubbleState.FailureState -> FailureTooltipOverlayContent(
+                            failure = s,
+                            bubblePosition = bubblePosition,
+                            density = resources.displayMetrics.density,
+                            onTooltipClick = {
+                                if (s is BubbleState.FailureState.PossibleInjection) {
+                                    launchDetailPanelActivity(s.record.id)
+                                }
+                                // Other FailureState variants — onClick is a
+                                // no-op (no SessionRecord; tooltip is non-
+                                // touch-modal in practice per deferred-work D1).
+                            },
+                        )
+                        else -> Unit
                     }
                 }
             }

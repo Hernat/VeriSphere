@@ -40,4 +40,31 @@
     <!-- Reserved for future a11y wiring (V2 i18n pass owns the prefix-binding). -->
     <string name="detail_regional_bias_a11y_prefix" tools:ignore="UnusedResources">Regional context:</string>
 
+    <!-- Story 3.3 — FailureState flash word + headline strings (UX-DR15, UX-DR17,
+         UX spec lines 673–680). Word strings are uppercase per UX spec; headlines
+         are warm-tone full sentences (UX spec line 782 "prefer Try again over
+         Retry or Failed"). Five FailureState variants: Offline / Timeout /
+         DailyLimit / QuotaExhausted / PossibleInjection. The silent-bucket
+         failures (PermissionDenied, CaptureFailed, HttpError, MalformedResponse)
+         have NO strings — the bubble returns silently to Idle. -->
+    <string name="flash_offline_word">OFFLINE</string>
+    <string name="flash_offline_headline">Try again when you\'re online</string>
+    <string name="flash_timeout_word">TIMEOUT</string>
+    <string name="flash_timeout_headline">Try again</string>
+    <string name="flash_daily_limit_word">DAILY LIMIT</string>
+    <string name="flash_daily_limit_headline">Daily limit reached. Try again tomorrow.</string>
+    <string name="flash_quota_exhausted_word">UNAVAILABLE</string>
+    <string name="flash_quota_exhausted_headline">Service temporarily unavailable</string>
+    <string name="flash_possible_injection_word">POSSIBLE INJECTION</string>
+    <string name="flash_possible_injection_headline">See OCR text</string>
+
+    <!-- Story 3.3 — FailureState contentDescriptions for TalkBack on the bubble
+         surface (NFR12, UX-DR18). Pattern matches "Verdict: {label}" from the
+         existing verdict contentDescriptions; here we use "State: {label}". -->
+    <string name="bubble_state_offline_content_description">State: offline</string>
+    <string name="bubble_state_timeout_content_description">State: timeout</string>
+    <string name="bubble_state_daily_limit_content_description">State: daily limit reached</string>
+    <string name="bubble_state_quota_exhausted_content_description">State: service unavailable</string>
+    <string name="bubble_state_possible_injection_content_description">State: possible injection detected</string>
+
 </resources>

@@ -24,6 +24,11 @@
 
     <!-- Failure / state colours -->
     <color name="vs_state_offline">#1F1F1F</color>
+    <!-- Story 3.3 patch P2 — on-colour for vs_state_offline. White on the
+         #1F1F1F light-mode background gives ~16:1 contrast (WCAG AA / AAA);
+         the dark-mode variant flips to dark text on the near-white
+         vs_state_offline=#E8E8E8 dark surface. -->
+    <color name="vs_on_state_offline">#FFFFFF</color>
 
     <!-- Privacy padlock — deliberately distinct from vs_verdict_true (UX Step 8) -->
     <color name="vs_privacy_padlock">#34A853</color>

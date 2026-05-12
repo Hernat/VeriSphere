@@ -172,8 +172,6 @@ class MainActivity : ComponentActivity() {
      */
     private fun resolvePendingDetailSession(intent: Intent?) {
         if (intent == null) return
-        // TEMP Story 2.4 smoke 2026-05-11 diagnostic. REVERT before merge.
-        Log.d(TAG, "resolvePendingDetailSession action=${intent.action} hasExtra=${intent.hasExtra(EXTRA_SESSION_ID)}")
         if (intent.action != Intent.ACTION_VIEW) return
         // P5 — `hasExtra` returns true even when the stored value is
         // null, so guard on the actual extracted value being non-null
@@ -182,7 +180,6 @@ class MainActivity : ComponentActivity() {
         val sessionId = intent.getStringExtra(EXTRA_SESSION_ID) ?: return
         pendingDetailSessionId = sessionId
         detailBubbleAnchorXPx = intent.getIntExtra(EXTRA_BUBBLE_ANCHOR_X_PX, 0)
-        Log.d(TAG, "resolvePendingDetailSession sessionId=$sessionId triggering tryOpenPendingDetailPanel")
         tryOpenPendingDetailPanel()
     }
 
@@ -195,10 +192,7 @@ class MainActivity : ComponentActivity() {
      * (subsequent `onNewIntent` on a running activity).
      */
     private fun tryOpenPendingDetailPanel() {
-        val pending = pendingDetailSessionId ?: run {
-            Log.d(TAG, "tryOpenPendingDetailPanel — no pending id, returning")
-            return
-        }
+        val pending = pendingDetailSessionId ?: return
         // P2 — `bypassGatesForTest` is read ONLY in BuildConfig.DEBUG.
         // Release builds always require both gates (production safety
         // posture). @VisibleForTesting is a lint hint, not access
@@ -206,8 +200,6 @@ class MainActivity : ComponentActivity() {
         // structurally unreachable in release APKs.
         val testBypass = BuildConfig.DEBUG && bypassGatesForTest
         val gatesOpen = testBypass || (overlayGranted && accessibilityServiceEnabled)
-        // TEMP Story 2.4 smoke 2026-05-11 diagnostic. REVERT before merge.
-        Log.d(TAG, "tryOpenPendingDetailPanel pending=$pending gatesOpen=$gatesOpen overlay=$overlayGranted access=$accessibilityServiceEnabled testBypass=$testBypass")
         if (!gatesOpen) return
         // Clear BEFORE launch so a duplicate trigger (e.g. onNewIntent
         // followed by onResume in the same cycle) does not fire twice.
@@ -216,8 +208,6 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val record = container.historyRepository.getById(pending)
             if (record != null) {
-                // TEMP Story 2.4 smoke 2026-05-11 diagnostic. REVERT.
-                Log.d(TAG, "tryOpenPendingDetailPanel record FOUND id=$pending verdictLabel=${record.verdictLabel} — setting detailRecordToShow")
                 detailRecordToShow = record
             } else {
                 // FIFO eviction edge case (record dropped between

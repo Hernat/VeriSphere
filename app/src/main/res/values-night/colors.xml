@@ -26,6 +26,11 @@
 
     <!-- Failure / state colours -->
     <color name="vs_state_offline">#E8E8E8</color>
+    <!-- Story 3.3 patch P2 — on-colour for vs_state_offline dark variant.
+         Dark text on the #E8E8E8 near-white dark-mode surface gives ~16:1
+         contrast (WCAG AA / AAA). Without this, the previously-hardcoded
+         Color.White verdict word rendered at ~1.04:1 — effectively invisible. -->
+    <color name="vs_on_state_offline">#1F1F1F</color>
 
     <!-- Privacy padlock -->
     <color name="vs_privacy_padlock">#81C995</color>

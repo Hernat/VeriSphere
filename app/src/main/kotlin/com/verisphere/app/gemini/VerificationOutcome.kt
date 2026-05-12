@@ -44,8 +44,10 @@ sealed class VerificationOutcome {
 
         /**
          * The per-device daily rate limit (30 captures / UTC-day, AR14)
-         * has been exhausted. Story 3.3 wires the `⚪ DAILY LIMIT` flash
-         * variant; in Story 1.8 the bubble silently returns to idle.
+         * has been exhausted. Story 3.3 maps this to
+         * `BubbleState.FailureState.DailyLimit` rendering the
+         * `⚪ DAILY LIMIT · Daily limit reached. Try again tomorrow.`
+         * flash variant.
          */
         data object DailyLimitReached : Failure()
 
@@ -58,6 +60,12 @@ sealed class VerificationOutcome {
          * — re-prompting the user mid-gesture would be hostile UX (PRD §
          * 5 Capture-cancelled returns silently to idle).
          *
+         * Story 3.3 routes this to the **silent bucket** in
+         * `BubbleStateMachine.mapFailureToState` — `Idle(faded=false)`
+         * with no flash (UX-DR15 — operator/dev failure category, not
+         * user-actionable from a bubble flash; the user is routed to
+         * the dedicated Accessibility explanation Activity instead).
+         *
          * Originally (Story 1.8 deprecated): "user cancelled the OS
          * MediaProjection dialog OR the held projection was revoked from
          * the system shade." See Sprint Change 2026-05-07.
@@ -68,15 +76,20 @@ sealed class VerificationOutcome {
          * Frame capture threw (display rotated mid-capture, virtual-display
          * creation refused, image acquire timeout) OR the 20 s pipeline
          * budget [com.verisphere.app.capture.CapturePipeline.CAPTURE_TIMEOUT]
-         * was exceeded. Story 3.3 maps this to the `⚫ TIMEOUT` flash
-         * variant.
+         * was exceeded. Story 3.3 routes this to the **silent bucket**
+         * in `BubbleStateMachine.mapFailureToState` — `Idle(faded=false)`
+         * with no flash (UX-DR15 — dev/operator failure category, no
+         * user-facing root-cause hint we could surface). The user-visible
+         * timeout case is owned by [Timeout] (Gemini-call timeout).
          */
         data object CaptureFailed : Failure()
 
         /**
          * No network connectivity — DNS resolution failed
-         * (`UnknownHostException`). Story 3.3 maps this to the
-         * `📡 OFFLINE` flash variant. Verdict requires the Gemini
+         * (`UnknownHostException`). Story 3.3 maps this to
+         * `BubbleState.FailureState.Offline` rendering the
+         * `📡 OFFLINE · Try again when you're online` flash on the
+         * `vs_state_offline` palette. Verdict requires the Gemini
          * round-trip — there is no offline fallback in V1 (architecture
          * line 73 — Gemini API is the only mandatory external service).
          * Surfaced by [com.verisphere.app.gemini.GeminiClient.verify]
@@ -87,9 +100,12 @@ sealed class VerificationOutcome {
         /**
          * The Gemini call exceeded OkHttp's `callTimeout` budget (D3.8 —
          * 20 s ceiling). Surfaced as `SocketTimeoutException` or
-         * `InterruptedIOException`. Story 3.3 maps this to the
-         * `⏱️ TIMEOUT` flash variant. Story 3.2 may add a single retry
-         * with backoff before this state surfaces.
+         * `InterruptedIOException`. Story 3.3 maps this to
+         * `BubbleState.FailureState.Timeout` rendering the
+         * `⏱️ TIMEOUT · Try again` flash on the `vs_state_offline`
+         * palette (same colour token as [Offline] per UX spec line 678).
+         * Story 3.2 absorbed one retry on transient 5xx / IOException
+         * before this state surfaces.
          */
         data object Timeout : Failure()
 
@@ -98,9 +114,11 @@ sealed class VerificationOutcome {
          * envelope. Distinct from [DailyLimitReached] because this
          * indicates the BUNDLED API key has hit its server-side quota
          * (NFR9 — known-extractable secret + AR14 mitigation), not the
-         * per-device daily limit. The user-facing message in Story 3.3
-         * differentiates between the two. Operational response: rotate
-         * the bundled key per `SECURITY.md` (D2.3).
+         * per-device daily limit. Story 3.3 maps this to
+         * `BubbleState.FailureState.QuotaExhausted` rendering the
+         * `⚪ UNAVAILABLE · Service temporarily unavailable` flash on
+         * the neutral grey palette. Operational response: rotate the
+         * bundled key per `SECURITY.md` (D2.3).
          */
         data object ApiQuotaExhausted : Failure()
 
@@ -110,7 +128,10 @@ sealed class VerificationOutcome {
          * was missing fields (`candidates` / `content` / `parts`), the
          * inner JSON was not valid JSON, the inner JSON did not match
          * the schema, OR an unknown `verdictLabel` value was returned.
-         * Story 3.3 maps this to a generic `⚠️ MALFORMED` flash variant.
+         * Story 3.3 routes this to the **silent bucket** in
+         * `BubbleStateMachine.mapFailureToState` — `Idle(faded=false)`
+         * with no flash (UX-DR15 — opaque to the user; the user has no
+         * recourse beyond a re-trigger).
          */
         data object MalformedResponse : Failure()
 
@@ -118,10 +139,14 @@ sealed class VerificationOutcome {
          * Generic HTTP failure with the raw status code. `code = 0` is
          * a sentinel for failures that happened before any HTTP status
          * was received (DNS resolved but connection refused, TLS
-         * handshake fail, OkHttp internal error). Story 3.2 will
-         * decide retry policy on the 4xx-vs-5xx-vs-`code=0` axis;
-         * Story 3.3 maps the 4xx / 5xx / sentinel cases to differentiated
-         * flash variants.
+         * handshake fail, OkHttp internal error). Story 3.2's retry
+         * policy already absorbed transient 5xx / IOException; Story 3.3
+         * routes any HttpError that surfaces here (4xx and post-retry
+         * 5xx) to the **silent bucket** in
+         * `BubbleStateMachine.mapFailureToState` — `Idle(faded=false)`
+         * with no flash (UX-DR15 — opaque to the user). User-actionable
+         * end-states are [Offline] / [Timeout] / [DailyLimitReached] /
+         * [ApiQuotaExhausted] only.
          */
         data class HttpError(val code: Int) : Failure()
     }

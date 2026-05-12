@@ -36,8 +36,13 @@ import kotlinx.serialization.Serializable
  *  - [injectionDetected] — Gemini's self-report flag (PRD FR8 anti-
  *    injection self-revealing posture). Story 3.1 added the field to
  *    preserve the wire-format signal from [`GeminiVerdictResponse.injectionDetected`][com.verisphere.app.gemini.GeminiVerdictResponse.injectionDetected];
- *    Story 3.3 reads it to drive the `FailureState.PossibleInjection`
- *    FlashTooltip variant. Defaults to `false` so historic persisted
+ *    Story 3.3 reads it in `BubbleStateMachine.reduce` to redirect a
+ *    successful `Verdict(record)` outcome to
+ *    `BubbleState.FailureState.PossibleInjection(record)` so the user
+ *    sees the amber warning flash and can tap to inspect the OCR text.
+ *    The record itself remains persisted to history via the existing
+ *    Story 1.10 `runCaptureAndDispatch` ordering. Defaults to `false`
+ *    so historic persisted
  *    blobs (Story 1.10 records written before Story 3.1) deserialise
  *    cleanly via kotlinx.serialization's `coerceInputValues = true;
  *    ignoreUnknownKeys = true` ([`SecureStorage`'s `Json` config][com.verisphere.app.storage.SecureStorage]) —
