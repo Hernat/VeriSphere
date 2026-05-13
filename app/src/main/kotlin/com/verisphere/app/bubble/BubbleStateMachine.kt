@@ -55,10 +55,28 @@ import kotlinx.coroutines.launch
  * the `MainScope()` default is for tests / quick callers and is
  * documented as a leaky default in deferred-work.md (V2 will make the
  * parameter required).
+ *
+ * **Story 3.4 reduce-motion** — when [reduceMotionEnabled] is `true`,
+ * the [BubbleEvent.LongPressCompleted] → [BubbleState.Capturing] →
+ * [BubbleState.Thinking] transition skips the 300 ms suction timer
+ * (`Capturing` is emitted, then on the **next dispatcher tick**
+ * `Thinking` is emitted without any virtual-time delay — the `delay`
+ * + `ensureActive` pair inside the launched coroutine is skipped). On a
+ * `StandardTestDispatcher` `runCurrent()` drains both transitions in
+ * one drain pass; on production `Dispatchers.Main` the gap is whatever
+ * the dispatcher schedules between two consecutive tasks. The flag is
+ * read once on service `onCreate` (see [com.verisphere.app.util.isReduceMotionEnabled])
+ * and never mutates for the life of this state machine instance —
+ * propagating a mid-session toggle requires restarting the service.
+ * The flag is exposed as a public `val` so the bubble Composables can
+ * read it via the same `bubbleStateMachine` reference the service
+ * already publishes (no separate CompositionLocal, no AppContainer
+ * field).
  */
 class BubbleStateMachine(
     initial: BubbleState = BubbleState.Idle(faded = false),
     private val coroutineScope: CoroutineScope = kotlinx.coroutines.MainScope(),
+    val reduceMotionEnabled: Boolean = false,
 ) {
 
     private val _state: MutableStateFlow<BubbleState> = MutableStateFlow(initial)
@@ -299,11 +317,22 @@ class BubbleStateMachine(
         // would also benefit). Cancel any in-flight suction job before
         // re-arming so a re-entry (e.g. Verdict × Long-press → Pressing
         // → Capturing during a previous suction) supersedes cleanly.
+        //
+        // Story 3.4 — when [reduceMotionEnabled] is `true`, the 300 ms
+        // delay (and its accompanying `ensureActive` cancellation check)
+        // are skipped; the `_state.update` runs as soon as the launched
+        // coroutine is scheduled (next dispatcher tick — NOT the same
+        // tick as `onEvent`). The `if (current == BubbleState.Capturing)`
+        // guard remains so a fast outcome that beat the dispatch (e.g. a
+        // cached Gemini response or a debug stub returning instantly) is
+        // not overwritten by a stale Thinking emission.
         if (next == BubbleState.Capturing && previous != BubbleState.Capturing) {
             suctionJob?.cancel()
             suctionJob = coroutineScope.launch {
-                delay(SUCTION_ANIMATION_MS)
-                ensureActive()
+                if (!reduceMotionEnabled) {
+                    delay(SUCTION_ANIMATION_MS)
+                    ensureActive()
+                }
                 _state.update { current ->
                     if (current == BubbleState.Capturing) BubbleState.Thinking else current
                 }

@@ -2,6 +2,7 @@ package com.verisphere.app.bubble.ui
 
 import android.content.res.Configuration
 import android.os.SystemClock
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
@@ -101,6 +102,17 @@ import kotlinx.coroutines.withTimeoutOrNull
  *   - [onLongPress] fires AT the 1 s mark while the finger is still
  *     down on the visible 56 dp bubble (PRD FR3, UX-DR5, UX-DR14).
  *   - [onDragDelta] / [onDragEnd] cover the drag gesture.
+ *
+ * **Reduce-motion (Story 3.4, UX-DR16)** — when [reduceMotion] is `true`,
+ * the Pressing scale-pulse is suppressed and the bubble Surface shifts
+ * to `MaterialTheme.colorScheme.onSurfaceVariant` for the Pressing
+ * dwell (150 ms tween). The flag is also forwarded to [SuctionAnimation]
+ * (early-return — emits no Canvas) and [ThinkingRing] (renders a 12 dp
+ * static dot pulsing alpha 0.6↔1.0 over 800 ms instead of the rotating
+ * arc). The single source of truth is
+ * [com.verisphere.app.bubble.BubbleStateMachine.reduceMotionEnabled],
+ * read once at service `onCreate` and never re-read for the life of
+ * the instance.
  */
 @Suppress("LongParameterList") // architecture line 762: stateless consumer; every gesture surfaces a distinct callback for clarity
 @Composable
@@ -115,6 +127,7 @@ fun BubbleOverlay(
     onDragDelta: (dxPx: Float, dyPx: Float) -> Unit,
     onDragEnd: () -> Unit,
     modifier: Modifier = Modifier,
+    reduceMotion: Boolean = false,
 ) {
     val density = LocalDensity.current
     val contentDescriptionText = bubbleContentDescriptionFor(state)
@@ -132,9 +145,17 @@ fun BubbleOverlay(
     // transition (e.g. Idle → Pressing) and stays stable across data-class
     // copy emissions of the same kind (e.g. Verdict.copy(tooltipFaded=true)
     // would otherwise re-fire the else-branch's redundant snapTo(1f)).
+    //
+    // Story 3.4 — when reduceMotion is true, the scale animation is
+    // suppressed entirely (pulseScale stays at 1f). The press is then
+    // acknowledged by a colour shift on the bubble Surface (see
+    // bubbleBackgroundColorFor below); the LaunchedEffect key set
+    // includes reduceMotion as a defensive re-key (the flag never flips
+    // for the life of an instance in production but this keeps Preview
+    // re-compositions correct).
     val pulseScale = remember { Animatable(initialValue = 1f) }
-    LaunchedEffect(state::class) {
-        if (state is BubbleState.Pressing) {
+    LaunchedEffect(state::class, reduceMotion) {
+        if (state is BubbleState.Pressing && !reduceMotion) {
             pulseScale.snapTo(1f)
             pulseScale.animateTo(
                 targetValue = PRESSING_PULSE_PEAK,
@@ -155,7 +176,29 @@ fun BubbleOverlay(
         }
     }
 
-    val bubbleBackground = bubbleBackgroundColorFor(state)
+    // Story 3.4 — under reduce-motion, the bubble background tweens
+    // primary ↔ onSurfaceVariant over 150 ms when transitioning in/out
+    // of Pressing (UX-DR16 verbatim "colour shift, onSurfaceVariant for
+    // 150 ms"). Verdict / FailureState colour transitions also tween
+    // under reduce-motion — acceptable because reduce-motion users
+    // explicitly opted into "no jarring snaps" and 150 ms is short
+    // enough that the verdict colour reads as "appeared with the
+    // verdict", not "slowly transitioned into it".
+    //
+    // Under reduceMotion = false the background resolves instantly
+    // via bubbleBackgroundColorFor(state, reduceMotion = false) —
+    // preserving the Story 1.10 / 3.3 instant-colour behaviour.
+    val staticBubbleBackground = bubbleBackgroundColorFor(state, reduceMotion)
+    val bubbleBackground = if (reduceMotion) {
+        val animated by animateColorAsState(
+            targetValue = staticBubbleBackground,
+            animationSpec = tween(durationMillis = PRESSING_COLOR_SHIFT_MS),
+            label = "bubbleBackgroundShift",
+        )
+        animated
+    } else {
+        staticBubbleBackground
+    }
 
     Box(
         modifier = modifier
@@ -206,9 +249,11 @@ fun BubbleOverlay(
         // State-specific overlays drawn on top of the bubble. Each lives
         // for as long as the corresponding state composes — entering /
         // leaving the state mounts / unmounts the overlay automatically.
+        // Story 3.4 — forward reduceMotion so SuctionAnimation early-
+        // returns and ThinkingRing renders its static-dot variant.
         when (state) {
-            BubbleState.Capturing -> SuctionAnimation()
-            BubbleState.Thinking -> ThinkingRing()
+            BubbleState.Capturing -> SuctionAnimation(reduceMotion = reduceMotion)
+            BubbleState.Thinking -> ThinkingRing(reduceMotion = reduceMotion)
             else -> Unit
         }
     }
@@ -244,11 +289,23 @@ private fun bubbleContentDescriptionFor(state: BubbleState): String = when (stat
 }
 
 @Composable
-private fun bubbleBackgroundColorFor(state: BubbleState): Color = when (state) {
-    is BubbleState.Verdict -> colorResource(verdictBackgroundFor(state.record.verdictLabel))
+private fun bubbleBackgroundColorFor(state: BubbleState, reduceMotion: Boolean): Color = when {
+    // Story 3.4 — UX-DR16: under reduce-motion, the Pressing state's
+    // visual acknowledgement is a colour shift to onSurfaceVariant
+    // (replacing the scale pulse). Short-circuited by the `&&` guard
+    // when reduceMotion is false so the explicit `Pressing → primary`
+    // arm below preserves Story 1.10 baseline behaviour.
+    state is BubbleState.Pressing && reduceMotion -> MaterialTheme.colorScheme.onSurfaceVariant
+    // Code-review patch P5 — explicit Pressing arm for the non-
+    // reduce-motion path (previously relied on the implicit fall-
+    // through to `else`). Defends against a future contributor adding
+    // an arm between `is BubbleState.FailureState` and `else` that
+    // would silently shift the Pressing colour.
+    state is BubbleState.Pressing -> MaterialTheme.colorScheme.primary
+    state is BubbleState.Verdict -> colorResource(verdictBackgroundFor(state.record.verdictLabel))
     // Story 3.3 — single sealed-interface arm; the smart cast feeds
     // `state` into failureBackgroundFor for per-variant palette lookup.
-    is BubbleState.FailureState -> colorResource(failureBackgroundFor(state))
+    state is BubbleState.FailureState -> colorResource(failureBackgroundFor(state))
     else -> MaterialTheme.colorScheme.primary
 }
 
@@ -448,6 +505,12 @@ private const val FADED_ALPHA = 0.4f
 // Story 1.10 — Pressing pulse: 400 ms scale 1.0 → 1.1 → 1.0.
 private const val PRESSING_PULSE_PEAK = 1.1f
 private const val PRESSING_PULSE_HALF_MS = 200
+
+// Story 3.4 — reduce-motion Pressing colour-shift animation duration
+// (UX-DR16 verbatim "onSurfaceVariant for 150 ms"). The 150 ms is the
+// tween from primary → onSurfaceVariant; the colour stays shifted for
+// the full Pressing dwell (bounded by the 1 s long-press deadline).
+private const val PRESSING_COLOR_SHIFT_MS = 150
 
 // ----- Previews -------------------------------------------------------
 
@@ -895,6 +958,122 @@ private fun BubbleOverlayFailurePossibleInjectionDarkPreview() {
             onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
             onTap = {}, onTapNearMiss = {}, onLongPress = {},
             onDragDelta = { _, _ -> }, onDragEnd = {},
+        )
+    }
+}
+
+// Story 3.4 — UX-DR16 reduce-motion previews. Three states × two
+// themes = 6 previews. Capturing is intentionally NOT previewed under
+// reduce-motion because the BubbleStateMachine short-circuit means it
+// barely composes in practice (Capturing → Thinking is one tick).
+
+@Preview(
+    showBackground = true,
+    showSystemUi = true,
+    name = "Reduce-motion Idle - Light",
+)
+@Composable
+private fun BubbleOverlayReduceMotionIdleLightPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Idle(faded = false),
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+            reduceMotion = true,
+        )
+    }
+}
+
+@Preview(
+    showBackground = true,
+    showSystemUi = true,
+    name = "Reduce-motion Idle - Dark",
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun BubbleOverlayReduceMotionIdleDarkPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Idle(faded = false),
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+            reduceMotion = true,
+        )
+    }
+}
+
+@Preview(
+    showBackground = true,
+    showSystemUi = true,
+    name = "Reduce-motion Pressing - Light",
+)
+@Composable
+private fun BubbleOverlayReduceMotionPressingLightPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Pressing,
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+            reduceMotion = true,
+        )
+    }
+}
+
+@Preview(
+    showBackground = true,
+    showSystemUi = true,
+    name = "Reduce-motion Pressing - Dark",
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun BubbleOverlayReduceMotionPressingDarkPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Pressing,
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+            reduceMotion = true,
+        )
+    }
+}
+
+@Preview(
+    showBackground = true,
+    showSystemUi = true,
+    name = "Reduce-motion Thinking - Light",
+)
+@Composable
+private fun BubbleOverlayReduceMotionThinkingLightPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Thinking,
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+            reduceMotion = true,
+        )
+    }
+}
+
+@Preview(
+    showBackground = true,
+    showSystemUi = true,
+    name = "Reduce-motion Thinking - Dark",
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun BubbleOverlayReduceMotionThinkingDarkPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Thinking,
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+            reduceMotion = true,
         )
     }
 }

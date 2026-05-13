@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -713,5 +714,79 @@ class BubbleStateMachineTest {
     fun `LongPressStarted from FailureState PossibleInjection transitions to Pressing`() = runTest {
         val record = sampleRecord(label = VerdictLabel.DOUBTFUL, injectionDetected = true)
         assertLongPressFromFailureGoesToPressing(BubbleState.FailureState.PossibleInjection(record = record))
+    }
+
+    // ===== Story 3.4 — Reduce-motion preference handling =================
+
+    @Test
+    fun `reduceMotionEnabled false plays the full suction timer`() = runTest {
+        val sm = BubbleStateMachine(
+            coroutineScope = newScope(testScheduler),
+            reduceMotionEnabled = false,
+        )
+        sm.onEvent(BubbleEvent.LongPressStarted)
+        sm.onEvent(BubbleEvent.LongPressCompleted)
+        runCurrent()
+        assertEquals(BubbleState.Capturing, sm.state.value)
+
+        advanceTimeBy(BubbleStateMachine.SUCTION_ANIMATION_MS - 1)
+        runCurrent()
+        // Boundary check — the SM must still be Capturing 1 ms before
+        // the timer fires (regression guard from Story 1.10).
+        assertEquals(BubbleState.Capturing, sm.state.value)
+
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(BubbleState.Thinking, sm.state.value)
+    }
+
+    @Test
+    fun `reduceMotionEnabled true short-circuits Capturing to Thinking instantly`() = runTest {
+        val sm = BubbleStateMachine(
+            coroutineScope = newScope(testScheduler),
+            reduceMotionEnabled = true,
+        )
+        sm.onEvent(BubbleEvent.LongPressStarted)
+        sm.onEvent(BubbleEvent.LongPressCompleted)
+        // No advanceTimeBy — the transition MUST fire inside one
+        // event-loop tick (the suctionJob skips the 300 ms delay and
+        // dispatches Thinking synchronously).
+        runCurrent()
+        assertEquals(BubbleState.Thinking, sm.state.value)
+    }
+
+    @Test
+    fun `reduceMotionEnabled property reflects constructor parameter`() {
+        val on = BubbleStateMachine(reduceMotionEnabled = true)
+        val off = BubbleStateMachine(reduceMotionEnabled = false)
+        try {
+            assertTrue(on.reduceMotionEnabled)
+            assertFalse(off.reduceMotionEnabled)
+        } finally {
+            on.dispose()
+            off.dispose()
+        }
+    }
+
+    @Test
+    fun `reduceMotionEnabled true does not leak the suction job after dispose`() = runTest {
+        val sm = BubbleStateMachine(
+            coroutineScope = newScope(testScheduler),
+            reduceMotionEnabled = true,
+        )
+        sm.onEvent(BubbleEvent.LongPressStarted)
+        sm.onEvent(BubbleEvent.LongPressCompleted)
+        runCurrent()
+        assertEquals(BubbleState.Thinking, sm.state.value)
+
+        // dispose() must not throw and must leave no pending
+        // continuations that re-emit Thinking after the timer would
+        // have fired (here the timer was synchronous so this is a
+        // belt-and-suspenders check — the SM must not regress to a
+        // version where a deferred Thinking emission overwrites a
+        // subsequent state).
+        sm.dispose()
+        advanceTimeBy(BubbleStateMachine.SUCTION_ANIMATION_MS * 2)
+        assertEquals(BubbleState.Thinking, sm.state.value)
     }
 }

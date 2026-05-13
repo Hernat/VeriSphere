@@ -44,16 +44,26 @@ import com.verisphere.app.ui.theme.VeriSphereTheme
  * (UX spec line 696). Not a live region; the user already knows they
  * triggered the capture.
  *
- * **Reduce-motion** — Story 3.4 / UX-DR16 will branch the duration to 0
- * when `Settings.System.ANIMATOR_DURATION_SCALE` is 0. For Story 1.10
- * the animation is unconditional.
+ * **Story 3.4 — Reduce-motion** — when [reduceMotion] is `true`, the
+ * Composable returns early and emits no Canvas. Belt-and-suspenders
+ * with the [com.verisphere.app.bubble.BubbleStateMachine] short-circuit
+ * (Story 3.4 reducer): the SM transitions `Capturing → Thinking`
+ * synchronously, so this Composable barely composes; the early-return
+ * also covers fast-outcome races and any future code path that
+ * composes `Capturing` independently.
  */
 @Composable
 fun SuctionAnimation(
     modifier: Modifier = Modifier,
+    reduceMotion: Boolean = false,
     durationMs: Int = SUCTION_ANIMATION_MS_DEFAULT,
     color: Color = Color.White,
 ) {
+    // Story 3.4 — UX-DR16 short-circuit. Early-return BEFORE the
+    // remember { mutableFloatStateOf } allocation so no Compose state
+    // is ever held under reduce-motion.
+    if (reduceMotion) return
+
     // Driven by Animatable so the timeline uses the host MonotonicFrameClock
     // (the bubble overlay's ComposeView gets one because the service
     // dispatches ON_RESUME — see BubbleOverlayService.onStartCommand).
@@ -119,5 +129,35 @@ private fun SuctionAnimationLightPreview() {
 private fun SuctionAnimationDarkPreview() {
     VeriSphereTheme {
         SuctionAnimation()
+    }
+}
+
+// Story 3.4 — UX-DR16 reduce-motion previews. Both render an empty
+// preview canvas (zero pixels) — this IS the expected reduce-motion
+// behaviour (the early-return in the Composable body suppresses the
+// suction ring entirely).
+
+@Preview(
+    showBackground = true,
+    showSystemUi = true,
+    name = "Suction - Reduce-motion - Light",
+)
+@Composable
+private fun SuctionAnimationReduceMotionLightPreview() {
+    VeriSphereTheme {
+        SuctionAnimation(reduceMotion = true)
+    }
+}
+
+@Preview(
+    showBackground = true,
+    showSystemUi = true,
+    name = "Suction - Reduce-motion - Dark",
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun SuctionAnimationReduceMotionDarkPreview() {
+    VeriSphereTheme {
+        SuctionAnimation(reduceMotion = true)
     }
 }

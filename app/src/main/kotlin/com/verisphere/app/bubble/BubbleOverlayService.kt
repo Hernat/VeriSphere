@@ -50,6 +50,7 @@ import com.verisphere.app.capture.CapturePipeline
 import com.verisphere.app.gemini.VerificationOutcome
 import com.verisphere.app.storage.SessionRecord
 import com.verisphere.app.ui.theme.VeriSphereTheme
+import com.verisphere.app.util.isReduceMotionEnabled
 import com.verisphere.app.util.tag
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -258,7 +259,17 @@ class BubbleOverlayService :
         startForegroundCompat()
 
         container = (application as VeriSphereApplication).container
-        bubbleStateMachine = BubbleStateMachine(coroutineScope = serviceScope)
+        // Story 3.4 — read reduce-motion preference ONCE on service
+        // creation (UX-DR16 "read once per session"). The flag is then
+        // cached as a public val on the state machine; Composables
+        // read it via the same bubbleStateMachine reference. A
+        // mid-session toggle requires the user to stop + restart
+        // VeriSphere, consistent with how Android itself treats
+        // ANIMATOR_DURATION_SCALE changes.
+        bubbleStateMachine = BubbleStateMachine(
+            coroutineScope = serviceScope,
+            reduceMotionEnabled = isReduceMotionEnabled(applicationContext),
+        )
 
         // Story 1.8.5 (Sprint Change 2026-05-07): pipeline reads the
         // active VeriSphereAccessibilityService via its @Volatile static
@@ -502,6 +513,13 @@ class BubbleOverlayService :
                         onLongPress = ::onBubbleLongPress,
                         onDragDelta = ::onBubbleDragDelta,
                         onDragEnd = ::onBubbleDragEnd,
+                        // Story 3.4 — read the cached flag directly. The
+                        // value never mutates for the life of this
+                        // BubbleStateMachine instance (read once at
+                        // onCreate above), so no collectAsState wrapper
+                        // is needed; Compose treats the captured value
+                        // as a constant for this composition.
+                        reduceMotion = bubbleStateMachine.reduceMotionEnabled,
                     )
                 }
             }
