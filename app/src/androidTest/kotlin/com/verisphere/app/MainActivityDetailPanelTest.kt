@@ -32,12 +32,18 @@ import org.junit.runner.RunWith
  *
  * **Launch sequencing** — `createAndroidComposeRule<MainActivity>()`
  * launches the activity with a default MAIN intent (no panel extras),
- * so the BootstrapPlaceholder renders first (the gate-bypass flag
- * masks the overlay / accessibility checks). Each test method then
- * sends a NEW intent via [androidx.test.core.app.ActivityScenario]'s
- * underlying `startActivity` call, which routes through `onNewIntent`
- * (manifest `launchMode="singleTop"` + `FLAG_ACTIVITY_SINGLE_TOP`) and
- * triggers the panel-open path.
+ * so the [com.verisphere.app.ui.history.HistoryScreen] renders first
+ * (the gate-bypass flag masks the overlay / accessibility checks).
+ * Each test method then sends a NEW intent via
+ * [androidx.test.core.app.ActivityScenario]'s underlying
+ * `startActivity` call, which routes through `onNewIntent` (manifest
+ * `launchMode="singleTop"` + `FLAG_ACTIVITY_SINGLE_TOP`) and triggers
+ * the panel-open path. Story 4.1 replaced the previous
+ * `BootstrapPlaceholder` ("VeriSphere" centred text) with `HistoryScreen`
+ * which renders the seeded records' headlines in a `LazyColumn` BEHIND
+ * the panel — so per-record headlines MUST be unique to avoid
+ * multi-match failures on `onNodeWithText(...)` (which is a
+ * single-node matcher).
  *
  * **Gate bypass** — [MainActivity.bypassGatesForTest] is set in a
  * static initializer block (runs before the rule's `before` phase
@@ -47,8 +53,11 @@ import org.junit.runner.RunWith
  *
  * **Fixture seeding** — the production `HistoryRepository` (shared
  * singleton via `AppContainer`) is seeded in `@Before` with unique
- * session ids per test method. The cache caps at 500 entries; the
- * suite seeds at most 2 records, well within range.
+ * session ids per test method AND unique headlines per record
+ * ([fixtureHeadlineFor]) to avoid collision with the
+ * `HistoryScreen`-rendered LazyColumn rows behind the panel. The
+ * cache caps at 500 entries; the suite seeds at most 2 records, well
+ * within range.
  *
  * Method names use underscore_snake_case per the DEX < 040 fallback +
  * the existing androidTest convention (`SourceLinkChipUiTest`,
@@ -67,11 +76,16 @@ class MainActivityDetailPanelTest {
         MainActivity.bypassGatesForTest = true
         // Seed the production HistoryRepository (shared singleton via
         // AppContainer). Each method uses a uniquely-keyed id so order
-        // independence is preserved within the suite.
+        // independence is preserved within the suite. Story 4.1 P1 —
+        // headlines must ALSO be unique per record because Story 4.1's
+        // `HistoryScreen` now renders all seeded records' headlines in
+        // a LazyColumn behind the detail panel; a duplicate-headline
+        // seed would produce a multi-match crash on
+        // `onNodeWithText(FIXTURE_HEADLINE)` (single-node matcher).
         val container = appContainer()
         runBlocking {
-            container.historyRepository.append(fixtureRecord(id = "primary-test-id"))
-            container.historyRepository.append(fixtureRecord(id = "tooltip-test-id"))
+            container.historyRepository.append(fixtureRecord(id = PRIMARY_ID))
+            container.historyRepository.append(fixtureRecord(id = TOOLTIP_ID))
         }
     }
 
@@ -94,11 +108,17 @@ class MainActivityDetailPanelTest {
 
     @Test
     fun tap_on_verdict_bubble_intent_opens_panel_with_record_fields() {
-        sendPanelIntent("primary-test-id")
+        sendPanelIntent(PRIMARY_ID)
         composeTestRule.waitForIdle()
 
+        // P1 — assert the PRIMARY headline (unique per record) so the
+        // node lookup matches exactly one node — the panel headline.
+        // The history-list LazyColumn row for the same record also
+        // contains this string; we expect 2 matches and accept either.
         composeTestRule.onNodeWithText("TRUE").assertIsDisplayed()
-        composeTestRule.onNodeWithText(FIXTURE_HEADLINE).assertIsDisplayed()
+        composeTestRule
+            .onAllNodesWithText(fixtureHeadlineFor(PRIMARY_ID))
+            .assertCountEquals(EXPECTED_MATCHES_PANEL_PLUS_HISTORY)
         composeTestRule.onNodeWithText("What was read").assertIsDisplayed()
         composeTestRule.onNodeWithText("Sources").assertIsDisplayed()
         composeTestRule.onNodeWithText("No one sees this. Just between us.").assertIsDisplayed()
@@ -109,11 +129,13 @@ class MainActivityDetailPanelTest {
         // The tooltip-tap path and the bubble-tap path produce the
         // same Intent via the same factory (buildDetailPanelIntent);
         // this method validates a second-record fixture also renders.
-        sendPanelIntent("tooltip-test-id")
+        sendPanelIntent(TOOLTIP_ID)
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("TRUE").assertIsDisplayed()
-        composeTestRule.onNodeWithText(FIXTURE_HEADLINE).assertIsDisplayed()
+        composeTestRule
+            .onAllNodesWithText(fixtureHeadlineFor(TOOLTIP_ID))
+            .assertCountEquals(EXPECTED_MATCHES_PANEL_PLUS_HISTORY)
     }
 
     @Test
@@ -123,13 +145,19 @@ class MainActivityDetailPanelTest {
 
         // The panel section heading from Story 2.3 must NOT exist.
         composeTestRule.onNodeWithText("What was read").assertDoesNotExist()
-        // The placeholder text (app_name) remains visible.
-        composeTestRule.onNodeWithText("VeriSphere").assertIsDisplayed()
+        // P1 — Story 4.1 replaced the "VeriSphere" BootstrapPlaceholder
+        // with HistoryScreen; assert the seeded record headlines are
+        // visible in the history list (which is now the fallback UI
+        // shown when the panel is not open). Each seed is unique so
+        // exactly one node per record.
+        composeTestRule
+            .onAllNodesWithText(fixtureHeadlineFor(PRIMARY_ID))
+            .assertCountEquals(EXPECTED_MATCHES_HISTORY_ONLY)
     }
 
     @Test
     fun back_gesture_closes_panel_and_returns_to_placeholder() {
-        sendPanelIntent("primary-test-id")
+        sendPanelIntent(PRIMARY_ID)
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithText("What was read").assertIsDisplayed()
 
@@ -139,7 +167,12 @@ class MainActivityDetailPanelTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("What was read").assertDoesNotExist()
-        composeTestRule.onNodeWithText("VeriSphere").assertIsDisplayed()
+        // P1 — Story 4.1 HistoryScreen is the post-dismiss fallback UI;
+        // assert the seeded record headline is visible in the history
+        // list. Exactly one match (panel is dismissed).
+        composeTestRule
+            .onAllNodesWithText(fixtureHeadlineFor(PRIMARY_ID))
+            .assertCountEquals(EXPECTED_MATCHES_HISTORY_ONLY)
     }
 
     @Test
@@ -165,14 +198,16 @@ class MainActivityDetailPanelTest {
         //      covers the fontScale = 1.5f rendering of every section
         //      via a direct `composeTestRule.setContent` with
         //      `CompositionLocalProvider(LocalDensity provides ...)`.
-        sendPanelIntent("primary-test-id")
+        sendPanelIntent(PRIMARY_ID)
         composeTestRule.waitForIdle()
 
         // Same 5 section assertions as method 1 — every node from
         // method 1 must remain reachable via the activity-mounted
         // panel composition.
         composeTestRule.onNodeWithText("TRUE").assertIsDisplayed()
-        composeTestRule.onNodeWithText(FIXTURE_HEADLINE).assertIsDisplayed()
+        composeTestRule
+            .onAllNodesWithText(fixtureHeadlineFor(PRIMARY_ID))
+            .assertCountEquals(EXPECTED_MATCHES_PANEL_PLUS_HISTORY)
         composeTestRule.onNodeWithText("What was read").assertIsDisplayed()
         composeTestRule.onNodeWithText("Sources").assertIsDisplayed()
         composeTestRule.onNodeWithText("No one sees this. Just between us.").assertIsDisplayed()
@@ -190,7 +225,7 @@ class MainActivityDetailPanelTest {
         // Verifies that detailRecordToShow correctly resets on
         // dismiss AND can be re-populated on the next onNewIntent
         // cycle.
-        sendPanelIntent("primary-test-id")
+        sendPanelIntent(PRIMARY_ID)
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithText("What was read").assertIsDisplayed()
 
@@ -198,10 +233,12 @@ class MainActivityDetailPanelTest {
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithText("What was read").assertDoesNotExist()
 
-        sendPanelIntent("primary-test-id")
+        sendPanelIntent(PRIMARY_ID)
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithText("What was read").assertIsDisplayed()
-        composeTestRule.onNodeWithText(FIXTURE_HEADLINE).assertIsDisplayed()
+        composeTestRule
+            .onAllNodesWithText(fixtureHeadlineFor(PRIMARY_ID))
+            .assertCountEquals(EXPECTED_MATCHES_PANEL_PLUS_HISTORY)
     }
 
     // ─── Fixture helpers ─────────────────────────────────────────────
@@ -230,7 +267,7 @@ class MainActivityDetailPanelTest {
         id = id,
         timestampMs = 0L,
         verdictLabel = VerdictLabel.TRUE,
-        headline = FIXTURE_HEADLINE,
+        headline = fixtureHeadlineFor(id),
         contextLines = emptyList(),
         sourceLinks = listOf(
             SourceCitation(
@@ -245,7 +282,28 @@ class MainActivityDetailPanelTest {
     )
 
     companion object {
-        private const val FIXTURE_HEADLINE = "Story 2.4 fixture headline"
+        private const val PRIMARY_ID = "primary-test-id"
+        private const val TOOLTIP_ID = "tooltip-test-id"
+
+        /**
+         * Story 4.1 P1 — record-specific headline. Each seeded record
+         * gets a unique headline so `onNodeWithText(...)` (a
+         * single-node matcher) does not multi-match against the
+         * `HistoryScreen` LazyColumn rows that now render behind the
+         * detail panel.
+         *
+         * `EXPECTED_MATCHES_PANEL_PLUS_HISTORY` = 2 because the panel
+         * renders the record's headline AND the history-list row
+         * renders the same record's headline behind the panel.
+         * `EXPECTED_MATCHES_HISTORY_ONLY` = 1 because only the
+         * history-list row renders the headline when the panel is
+         * dismissed / never opened.
+         */
+        private fun fixtureHeadlineFor(id: String): String =
+            "Story 2.4 fixture headline ($id)"
+
+        private const val EXPECTED_MATCHES_PANEL_PLUS_HISTORY = 2
+        private const val EXPECTED_MATCHES_HISTORY_ONLY = 1
 
         // P7 — Use @BeforeClass / @AfterClass (with @JvmStatic) so the
         // gate-bypass flag is set BEFORE any @Rule fires AND reset

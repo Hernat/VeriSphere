@@ -15,21 +15,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.annotation.VisibleForTesting
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -41,6 +34,7 @@ import com.verisphere.app.storage.SessionRecord
 import com.verisphere.app.ui.detail.AnchoredDetailPanel
 import com.verisphere.app.ui.detail.DetailPanelContent
 import com.verisphere.app.ui.detail.buildSourceLinkIntent
+import com.verisphere.app.ui.history.HistoryScreen
 import com.verisphere.app.ui.onboarding.AccessibilityExplanationScreen
 import com.verisphere.app.ui.onboarding.PermissionExplanationScreen
 import com.verisphere.app.ui.theme.VeriSphereTheme
@@ -58,8 +52,8 @@ import kotlinx.coroutines.launch
  *   - If `SYSTEM_ALERT_WINDOW` denied → [PermissionExplanationScreen].
  *   - Else if `VeriSphereAccessibilityService` not enabled →
  *     [AccessibilityExplanationScreen] (deep-links to Settings).
- *   - Else → [BootstrapPlaceholder] AND start
- *     [BubbleOverlayService] from `onResume` (the bubble can now
+ *   - Else → [com.verisphere.app.ui.history.HistoryScreen] (Story 4.1) AND
+ *     start [BubbleOverlayService] from `onResume` (the bubble can now
  *     capture).
  *
  * The accessibility-enabled check uses BOTH
@@ -131,7 +125,14 @@ class MainActivity : ComponentActivity() {
                             onActivateClick = ::launchAccessibilitySettings,
                             onExitClick = ::finish,
                         )
-                        else -> BootstrapPlaceholder()
+                        else -> HistoryScreen(
+                            // Story 4.4 will replace this no-op with a
+                            // read-only DetailPanelHost open for the
+                            // tapped record id. Story 4.1's contract is
+                            // the scaffold + ViewModel state surface only.
+                            onItemClick = { /* Story 4.4 wires read-only panel open */ },
+                            onBackClick = ::finish,
+                        )
                     }
                     val record = detailRecordToShow
                     val panelGateOpen = (BuildConfig.DEBUG && bypassGatesForTest) ||
@@ -418,31 +419,3 @@ private fun DetailPanelHost(
     }
 }
 
-/**
- * Placeholder body. Wraps content in a Material 3 `Scaffold` so the
- * status / navigation bar insets propagate correctly under
- * `enableEdgeToEdge()` — without this the placeholder text would
- * draw under the system bars on devices that respect inset reporting.
- */
-@Composable
-private fun BootstrapPlaceholder() {
-    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(text = stringResource(R.string.app_name))
-        }
-    }
-}
-
-@Preview(showBackground = true, name = "Light")
-@Preview(showBackground = true, name = "Dark", uiMode = Configuration.UI_MODE_NIGHT_YES)
-@Composable
-private fun BootstrapPlaceholderPreview() {
-    VeriSphereTheme {
-        BootstrapPlaceholder()
-    }
-}
