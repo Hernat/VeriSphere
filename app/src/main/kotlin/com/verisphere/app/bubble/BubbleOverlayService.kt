@@ -199,6 +199,27 @@ class BubbleOverlayService :
     @Volatile
     private var lastTappableRecordForTap: SessionRecord? = null
 
+    // Story 4.3 — pre-touch-down snapshot of the most recently entered
+    // non-Pressing state. Used by `onBubbleTap` / `onBubblePressCancelled`
+    // to decide between Idle × Tap (open history) and the existing
+    // Verdict / PossibleInjection × Tap (open detail panel) /
+    // FailureState.{Offline|Timeout|DailyLimit|QuotaExhausted} × Tap
+    // (silent dismissal — no panel, no history).
+    //
+    // Set by the state observer when entering Idle / Verdict /
+    // PossibleInjection / non-tappable FailureState / Capturing /
+    // Thinking; INTENTIONALLY left untouched on entering Pressing (the
+    // touch-down phase) so the snapshot survives the synchronous
+    // LongPressStarted dispatch and is readable when the tap callback
+    // fires on release.
+    //
+    // Mirrors the existing `lastTappableRecordForTap` snapshot lifecycle
+    // (Story 2.4 smoke fix + Story 3.3 P1 patch): the tap callbacks
+    // read both fields, then `BubbleEvent.BackToIdle` clears the
+    // snapshot transitively via the observer's Idle arm.
+    @Volatile
+    private var lastNonPressingState: BubbleState? = null
+
     // Story 1.10 — separate WindowManager view for the FlashTooltip
     // (Critical Dev Note #3 in story file). Kept distinct from the
     // bubble's halo window so the bubble's 104 dp + FLAG_NOT_TOUCH_MODAL
@@ -639,27 +660,43 @@ class BubbleOverlayService :
         // `Pressing` means the user was viewing a tappable state
         // (Verdict / PossibleInjection) before the touch-down — open the
         // panel for that record before dismissing.
-        val snapshot = lastTappableRecordForTap
-        if (snapshot != null) {
+        //
+        // Story 4.3 — same Idle × Tap reasoning: a finger lingering
+        // ≥ 200 ms on the idle bubble routes through onPressCancelled,
+        // NOT onTap. Without `handleIdleBubbleTap` here, ~30–50 % of
+        // human idle-taps would dismiss silently and never open
+        // history. The helper is a no-op when sourceSnapshot is not
+        // Idle (e.g. Offline / Timeout / DailyLimit / QuotaExhausted
+        // sources stay silent).
+        val tappableSnapshot = lastTappableRecordForTap
+        val sourceSnapshot = lastNonPressingState
+        if (tappableSnapshot != null) {
             bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
-            launchDetailPanelActivity(snapshot.id)
+            launchDetailPanelActivity(tappableSnapshot.id)
         } else {
             bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
+            handleIdleBubbleTap(
+                sourceState = sourceSnapshot,
+                onLaunchHistory = ::launchHistoryActivity,
+            )
         }
     }
 
     /**
      * Bubble tap callback. Story 2.4 wires `Verdict × Tap` to "expand
      * detail panel" per UX-DR14 by launching [MainActivity] with the
-     * panel-launch Intent ([buildDetailPanelIntent]); Story 4.3 will
-     * wire `Idle × Tap` to "open chronological history".
+     * panel-launch Intent ([buildDetailPanelIntent]); Story 4.3 wires
+     * `Idle × Tap` to "open chronological history" via
+     * [handleIdleBubbleTap] + [launchHistoryActivity].
      *
-     * **State invariant** (story spec AC #4 + Critical Dev Note #1): the
-     * state machine is read SYNCHRONOUSLY via `state.value` snapshot and
-     * NO [BubbleEvent] is dispatched. The bubble remains in
-     * `Verdict(record, tooltipFaded)` across the panel open / close
-     * cycle — the activity-side dismissal does not call back into the
-     * service.
+     * **State invariant** (story spec AC #4 + Critical Dev Note #1):
+     * [BubbleEvent.BackToIdle] is the only event dispatched, and only to
+     * undo the touch-down's synchronous `LongPressStarted → Pressing`
+     * transition. After the dispatch the bubble visibly returns to
+     * [BubbleState.Idle] (per [BubbleStateMachine] reducer); the
+     * activity-side surface (Story 2.4 `AnchoredDetailPanel` or
+     * Story 4.3 `HistoryScreen`) is the only post-tap UI artefact, and
+     * does not call back into the service when dismissed.
      *
      * UserActivity is already emitted on touch-down via
      * [onBubbleUserActivity], so the fade-timer reset is taken care of
@@ -667,7 +704,8 @@ class BubbleOverlayService :
      */
     private fun onBubbleTap() {
         val currentState = bubbleStateMachine.state.value
-        val snapshot = lastTappableRecordForTap
+        val tappableSnapshot = lastTappableRecordForTap
+        val sourceSnapshot = lastNonPressingState
 
         // Story 2.4 smoke 2026-05-11 (+ Story 3.3) — gesture handler
         // dispatches LongPressStarted on touch-down BEFORE onTap fires,
@@ -679,9 +717,9 @@ class BubbleOverlayService :
         // intent was clearly "open the panel". Dispatch BackToIdle to
         // undo the touch-down's Pressing transition (the bubble returns
         // to Idle as if no press happened) and launch the panel.
-        if (currentState is BubbleState.Pressing && snapshot != null) {
+        if (currentState is BubbleState.Pressing && tappableSnapshot != null) {
             bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
-            launchDetailPanelActivity(snapshot.id)
+            launchDetailPanelActivity(tappableSnapshot.id)
             return
         }
 
@@ -689,16 +727,29 @@ class BubbleOverlayService :
         // dispatches LongPressStarted (Idle / Verdict / FailureState →
         // Pressing) BEFORE this tap callback fires. For a non-tappable
         // source (Idle / FailureState.Offline / Timeout / DailyLimit /
-        // QuotaExhausted), `snapshot == null` so the branch above is
-        // skipped and we land here in `Pressing`. Without an explicit
-        // BackToIdle, the state machine stays in Pressing indefinitely
-        // (LongPressStarted from Pressing is a reducer no-op, so even a
-        // fresh touch-down cannot recover). Dispatching BackToIdle
-        // restores the bubble to Idle — the user's tap dismisses any
-        // failure flash early but recovers cleanly, matching the spec's
-        // "tap is a no-op" intent on the visible end-state.
+        // QuotaExhausted), `tappableSnapshot == null` so the branch
+        // above is skipped and we land here in `Pressing`. Without an
+        // explicit BackToIdle, the state machine stays in Pressing
+        // indefinitely (LongPressStarted from Pressing is a reducer
+        // no-op, so even a fresh touch-down cannot recover). Dispatching
+        // BackToIdle restores the bubble to Idle — the user's tap
+        // dismisses any failure flash early but recovers cleanly,
+        // matching the spec's "tap is a no-op" intent on the visible
+        // end-state.
+        //
+        // Story 4.3 — Idle × Tap → open history. The Idle source is
+        // confirmed via the pre-touch-down snapshot
+        // [lastNonPressingState]. Non-Idle non-tappable failure sources
+        // (Offline / Timeout / DailyLimit / QuotaExhausted) fall
+        // through to the BackToIdle no-op below — `handleIdleBubbleTap`
+        // emits no callback when sourceState is not Idle, satisfying
+        // AC #3 (FailureState × Tap → silent dismissal).
         if (currentState is BubbleState.Pressing) {
             bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
+            handleIdleBubbleTap(
+                sourceState = sourceSnapshot,
+                onLaunchHistory = ::launchHistoryActivity,
+            )
             return
         }
 
@@ -739,6 +790,28 @@ class BubbleOverlayService :
             startActivity(intent)
         } catch (e: ActivityNotFoundException) {
             Log.w(TAG, "Cannot launch MainActivity for detail panel — degraded.", e)
+        }
+    }
+
+    /**
+     * Story 4.3 — Build and dispatch the history-open [Intent].
+     *
+     * `startActivity` is wrapped in a try / catch for
+     * [ActivityNotFoundException] — extremely unlikely in practice
+     * (the manifest declares `MainActivity` with `exported="true"` +
+     * MAIN/LAUNCHER filter) but free defensive coverage matching the
+     * Story 2.4 sibling [launchDetailPanelActivity].
+     *
+     * No bubble-anchor extra is computed — history-open does not need
+     * one (the panel-anchor math in [visibleBubbleCenterXPx] is for the
+     * detail panel only). The entire payload is the action constant.
+     */
+    private fun launchHistoryActivity() {
+        val intent = buildOpenHistoryIntent(this)
+        try {
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "Cannot launch MainActivity for history — degraded.", e)
         }
     }
 
@@ -1177,10 +1250,20 @@ class BubbleOverlayService :
                     // resolved). Other FailureState variants do NOT set
                     // the snapshot — their bubble tap is a no-op
                     // (no SessionRecord to expand).
+                    // Story 4.3 — also maintain `lastNonPressingState` in
+                    // each non-Pressing arm. The Pressing arm preserves
+                    // BOTH snapshots through the synchronous touch-down
+                    // dispatch. Same race-window discipline as
+                    // `lastTappableRecordForTap`.
                     when (state) {
-                        is BubbleState.Verdict -> lastTappableRecordForTap = state.record
-                        is BubbleState.FailureState.PossibleInjection ->
+                        is BubbleState.Verdict -> {
                             lastTappableRecordForTap = state.record
+                            lastNonPressingState = state
+                        }
+                        is BubbleState.FailureState.PossibleInjection -> {
+                            lastTappableRecordForTap = state.record
+                            lastNonPressingState = state
+                        }
                         // Code-review patch P1 (Story 3.3) — clear the
                         // snapshot when entering a non-tappable, non-
                         // transient state (Idle / Capturing / Thinking /
@@ -1200,14 +1283,20 @@ class BubbleOverlayService :
                         // during `Pressing` to honour
                         // `Verdict × Tap → panel` /
                         // `PossibleInjection × Tap → panel` (AC #4).
-                        // Clearing on Pressing would force every short-tap
-                        // on a tappable variant to short-circuit through
-                        // DN1's `Pressing && snapshot=null → BackToIdle`
-                        // fallback and never reach `launchDetailPanelActivity`.
-                        is BubbleState.Idle,
+                        // Story 4.3 reads `lastNonPressingState` during
+                        // `Pressing` for the symmetric `Idle × Tap →
+                        // open history` route. Clearing either snapshot
+                        // on Pressing would break BOTH routes.
+                        is BubbleState.Idle -> {
+                            lastTappableRecordForTap = null
+                            lastNonPressingState = state
+                        }
                         BubbleState.Capturing,
                         BubbleState.Thinking,
-                        is BubbleState.FailureState -> lastTappableRecordForTap = null
+                        is BubbleState.FailureState -> {
+                            lastTappableRecordForTap = null
+                            lastNonPressingState = state
+                        }
                         BubbleState.Pressing -> Unit
                     }
                     // Story 3.3 — tooltip attach/detach: mount on Verdict

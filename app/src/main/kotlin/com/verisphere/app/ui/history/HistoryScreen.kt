@@ -44,8 +44,11 @@ import com.verisphere.app.ui.theme.VeriSphereTheme
  * plumbs the [HistoryViewModel]'s [HistoryUiState] StateFlow into
  * [HistoryContent]; no business logic. Story 4.2 fills the empty-state
  * copy + glyph and replaces the `ContentList` placeholder with
- * [HistoryItemRow]; Story 4.3 wires the bubble idle-tap entry
- * point; Story 4.4 wires `onItemClick` to the read-only detail panel.
+ * [HistoryItemRow]; Story 4.3 wired the bubble idle-tap entry point via
+ * [HistoryScreenIntent.ACTION_OPEN] (the bubble service builds an
+ * `Intent(MainActivity).setAction(ACTION_OPEN)` and `MainActivity.onNewIntent`
+ * dismisses any stale detail panel so this screen is the visible base
+ * layer); Story 4.4 wires `onItemClick` to the read-only detail panel.
  *
  * **`collectAsState` vs `collectAsStateWithLifecycle`** — V1 ships
  * [collectAsState] to avoid adding `androidx.lifecycle:lifecycle-runtime-compose`
@@ -368,4 +371,29 @@ private fun HistoryContentContent50RecordsDarkPreview() {
             )
         }
     }
+}
+
+/**
+ * Story 4.3 — Intent action namespace for the history surface.
+ *
+ * `HistoryScreen` is a top-level `@Composable fun`, not a class — Kotlin
+ * does not allow `companion object` on top-level functions. The sibling
+ * `object` is the idiomatic Kotlin/Android pattern for grouping stable
+ * Intent contracts (mirrors Android's `Intent.ACTION_*` constants on a
+ * sibling type-namespace) and preserves the epics-spec phrasing
+ * (`HistoryScreen.ACTION_OPEN`) closely enough that no spec amendment is
+ * required.
+ *
+ * Mirrors the Story 1.8.5 `MainActivity.ACTION_REQUEST_ACCESSIBILITY`
+ * format (`com.verisphere.app.action.<NAME>` prefix, SCREAMING_SNAKE_CASE
+ * suffix) so the action-string family stays consistent.
+ *
+ * **Public visibility intentional** — the action string IS the public
+ * Intent contract. The bubble service's `buildOpenHistoryIntent`
+ * (different package) and `MainActivity.onNewIntent` (different package)
+ * both read it; marking `internal` would compile but mislead readers
+ * about the contract's stability.
+ */
+object HistoryScreenIntent {
+    const val ACTION_OPEN: String = "com.verisphere.app.action.OPEN_HISTORY"
 }

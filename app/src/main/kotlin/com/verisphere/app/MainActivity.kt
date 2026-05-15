@@ -35,6 +35,7 @@ import com.verisphere.app.ui.detail.AnchoredDetailPanel
 import com.verisphere.app.ui.detail.DetailPanelContent
 import com.verisphere.app.ui.detail.buildSourceLinkIntent
 import com.verisphere.app.ui.history.HistoryScreen
+import com.verisphere.app.ui.history.HistoryScreenIntent
 import com.verisphere.app.ui.onboarding.AccessibilityExplanationScreen
 import com.verisphere.app.ui.onboarding.PermissionExplanationScreen
 import com.verisphere.app.ui.theme.VeriSphereTheme
@@ -155,10 +156,29 @@ class MainActivity : ComponentActivity() {
         // ACTION_REQUEST_ACCESSIBILITY when a long-press happens but
         // the accessibility service is off. Story 2.4: the same
         // service also routes here via ACTION_VIEW + EXTRA_SESSION_ID
-        // for the tap-to-expand flow. Update the cached intent (per
-        // the documented onNewIntent contract) and parse the action.
+        // for the tap-to-expand flow. Story 4.3: the same service
+        // routes here via HistoryScreenIntent.ACTION_OPEN when the
+        // user taps the idle bubble — ensure HistoryScreen is the
+        // visible base layer. Update the cached intent (per the
+        // documented onNewIntent contract) and parse the action.
         setIntent(intent)
         resolvePendingDetailSession(intent)
+
+        // Story 4.3 — when the bubble routes here via ACTION_OPEN, the
+        // gating `setContent { when {} else -> HistoryScreen(...) }`
+        // block in onCreate already renders HistoryScreen when both
+        // permission gates pass, so the only work needed is dismissing
+        // any stale DetailPanelHost overlay that might still be mounted
+        // from a prior Story 2.4 / 3.3 panel-open. Clearing
+        // `detailRecordToShow` triggers automatic Compose recomposition
+        // (mutableStateOf) that drops the DetailPanelHost. Also clear
+        // `pendingDetailSessionId` so a subsequent `tryOpenPendingDetailPanel`
+        // call (e.g. from `onResume` re-entering RESUMED) does not
+        // re-open the dismissed panel from a stale prior intent.
+        if (intent.action == HistoryScreenIntent.ACTION_OPEN) {
+            detailRecordToShow = null
+            pendingDetailSessionId = null
+        }
     }
 
     /**
