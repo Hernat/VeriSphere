@@ -1,12 +1,6 @@
 package com.verisphere.app.ui.onboarding
 
-import android.content.ActivityNotFoundException
-import android.content.Intent
 import android.content.res.Configuration
-import android.net.Uri
-import android.provider.Settings
-import android.util.Log
-import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,35 +13,54 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import com.verisphere.app.R
 import com.verisphere.app.ui.theme.VSSpacing
 import com.verisphere.app.ui.theme.VeriSphereTheme
-import com.verisphere.app.util.tag
 
 /**
- * Minimal permission-explanation surface shown by [com.verisphere.app.MainActivity]
- * when `Settings.canDrawOverlays` returns false (Story 1.6, AC #7, AC #8).
+ * Permission-explanation surface shown by [com.verisphere.app.MainActivity]
+ * when a runtime permission is denied (Story 1.6, AC #7 / AC #8 +
+ * Story 5.2 AC #2).
  *
- * Why minimal: the FULL first-launch permission orchestration
- * (`POST_NOTIFICATIONS` + `SYSTEM_ALERT_WINDOW` + service start +
- * tutorial) is Story 5.2. This screen exists in 1.6 only to render
- * the "denied → explain → re-attempt or exit" path required by AC #7.
+ * Two variants drive the displayed copy + CTA action:
  *
- * `SYSTEM_ALERT_WINDOW` is a special "appop" permission (API 23+) —
- * it cannot be granted via `ActivityCompat.requestPermissions`. The
- * "Allow overlay" button launches `Settings.ACTION_MANAGE_OVERLAY_PERMISSION`
- * with the app's package URI; the result becomes visible to MainActivity
- * via `onResume` re-checking `Settings.canDrawOverlays`.
+ *   - [PermissionVariant.OVERLAY]      — Story 1.6 path. `Settings.canDrawOverlays`
+ *     returned `false`; the host's [onPrimaryClick] should launch
+ *     `Settings.ACTION_MANAGE_OVERLAY_PERMISSION` with the package URI.
+ *   - [PermissionVariant.NOTIFICATION] — Story 5.2 path. `POST_NOTIFICATIONS`
+ *     denied on API 33+; the host's [onPrimaryClick] should invoke the
+ *     `ActivityResultContracts.RequestPermission` launcher field-initialized
+ *     in `MainActivity` (CDN #7).
+ *
+ * **Stateless composable** — same pattern as
+ * [AccessibilityExplanationScreen] (Story 1.8.5 P7): the side-effects
+ * (Intent construction, launcher invocation, `ActivityNotFoundException`
+ * fallback Toast) are the host's responsibility. The composable owns
+ * only layout + string resolution.
+ *
+ * Story 5.2 refactor: the Story 1.6 inline Intent launch + Toast
+ * fallback have been moved to
+ * [com.verisphere.app.MainActivity.launchOverlaySettings] so the
+ * composable signature is stateless across both variants (CDN #1
+ * stateless-callbacks pattern).
+ *
+ * @param variant Which permission is denied — drives the title + body +
+ *   CTA-label strings.
+ * @param onPrimaryClick Invoked when the user taps the variant's primary
+ *   CTA ("Allow overlay" / "Autoriser"). The host owns the Intent / launcher
+ *   invocation.
+ * @param onExit Invoked when the user taps the "Exit" `TextButton`. The
+ *   host should `finish()` the activity.
  */
 @Composable
 fun PermissionExplanationScreen(
+    onPrimaryClick: () -> Unit,
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
+    variant: PermissionVariant = PermissionVariant.OVERLAY,
 ) {
-    val context = LocalContext.current
     Scaffold(modifier = modifier.fillMaxSize()) { innerPadding ->
         Column(
             modifier = Modifier
@@ -60,41 +73,18 @@ fun PermissionExplanationScreen(
             ),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            if (variant.titleRes != null) {
+                Text(
+                    text = stringResource(variant.titleRes),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
             Text(
-                text = stringResource(R.string.permission_overlay_explanation),
+                text = stringResource(variant.bodyRes),
                 style = MaterialTheme.typography.bodyLarge,
             )
-            Button(
-                onClick = {
-                    // No FLAG_ACTIVITY_NEW_TASK: LocalContext is the host
-                    // Activity, so the Settings screen launches in the
-                    // same task. Pressing Back from Settings then returns
-                    // to MainActivity, whose onResume re-checks the
-                    // overlay permission and flips the gate. With
-                    // FLAG_ACTIVITY_NEW_TASK Back would land on the home
-                    // screen and the recheck would never fire.
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:${context.packageName}"),
-                    )
-                    try {
-                        context.startActivity(intent)
-                    } catch (e: ActivityNotFoundException) {
-                        // Some stripped Android distributions (heavily-modified
-                        // OEM skins, GSI, automotive variants) don't expose
-                        // ACTION_MANAGE_OVERLAY_PERMISSION. Fall back to a
-                        // user-facing instruction rather than crashing on
-                        // the recovery path.
-                        Log.w(TAG, "ACTION_MANAGE_OVERLAY_PERMISSION not resolvable on this device", e)
-                        Toast.makeText(
-                            context,
-                            R.string.permission_settings_unavailable,
-                            Toast.LENGTH_LONG,
-                        ).show()
-                    }
-                },
-            ) {
-                Text(text = stringResource(R.string.permission_allow_overlay))
+            Button(onClick = onPrimaryClick) {
+                Text(text = stringResource(variant.primaryCtaRes))
             }
             TextButton(onClick = onExit) {
                 Text(text = stringResource(R.string.permission_exit))
@@ -103,17 +93,59 @@ fun PermissionExplanationScreen(
     }
 }
 
-private val TAG = tag("PermissionExplanationScreen")
+/**
+ * Permission-variant enum driving the strings rendered by
+ * [PermissionExplanationScreen]. Add a new variant when a new runtime
+ * permission needs an explanation screen (and bring matching strings
+ * in `strings.xml` / `strings_onboarding.xml`).
+ */
+enum class PermissionVariant(
+    val titleRes: Int?,
+    val bodyRes: Int,
+    val primaryCtaRes: Int,
+) {
+    OVERLAY(
+        titleRes = null,
+        bodyRes = R.string.permission_overlay_explanation,
+        primaryCtaRes = R.string.permission_allow_overlay,
+    ),
+    NOTIFICATION(
+        titleRes = R.string.permission_notification_explanation_title,
+        bodyRes = R.string.permission_notification_explanation_body,
+        primaryCtaRes = R.string.permission_notification_explanation_cta,
+    ),
+}
 
-@Preview(showBackground = true, name = "Light")
+@Preview(showBackground = true, name = "Overlay Light")
 @Preview(
     showBackground = true,
-    name = "Dark",
+    name = "Overlay Dark",
     uiMode = Configuration.UI_MODE_NIGHT_YES,
 )
 @Composable
-private fun PermissionExplanationScreenPreview() {
+private fun PermissionExplanationScreenOverlayPreview() {
     VeriSphereTheme {
-        PermissionExplanationScreen(onExit = {})
+        PermissionExplanationScreen(
+            variant = PermissionVariant.OVERLAY,
+            onPrimaryClick = {},
+            onExit = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Notification Light")
+@Preview(
+    showBackground = true,
+    name = "Notification Dark",
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun PermissionExplanationScreenNotificationPreview() {
+    VeriSphereTheme {
+        PermissionExplanationScreen(
+            variant = PermissionVariant.NOTIFICATION,
+            onPrimaryClick = {},
+            onExit = {},
+        )
     }
 }

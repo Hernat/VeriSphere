@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VeriSphere onboarding strings — Story 5.2 (FR19, FR20 refined, D2.11).
+  Kept in a dedicated file (architecture § Resource organisation) because
+  the onboarding copy is high-stakes for the first-launch impression.
+  All entries merge into the same R.string.* namespace as strings.xml,
+  strings_tutorial.xml, and strings_verdict.xml.
+
+  Surface using these strings:
+   - Notification-permission denial → PermissionExplanationScreen with
+     PermissionVariant.NOTIFICATION on Android 13+ when POST_NOTIFICATIONS
+     denied (Story 5.2 AC #2).
+
+  Post-onboarding accessibility-revocation fallback (Story 5.2 AC #3 /
+  CDN #5) reuses the existing `accessibility_explanation_*` keys from
+  strings.xml via the AccessibilityExplanationScreen (Story 1.8.5 screen
+  reused per CDN #5 — same disclosure copy the user learned on tutorial
+  Card 1). No revocation-specific strings are needed in V1; if V2 decides
+  to differentiate revocation copy from pre-onboarding copy, the keys
+  can be authored at that point.
+
+  Copy guidelines (UX spec § Visual Hierarchy): ≤ 80 chars/sentence,
+  present tense, second person, warm-tone, no exclamation marks, no
+  apology framing.
+
+  TODO Story 7.5: add description="…" attributes for translation pass.
+-->
+<resources>
+
+    <!-- Story 5.2 — POST_NOTIFICATIONS denial explanation (PermissionExplanationScreen.PermissionVariant.NOTIFICATION). -->
+    <string name="permission_notification_explanation_title">Activer les notifications</string>
+    <string name="permission_notification_explanation_body">VeriSphere a besoin d\'envoyer une notification silencieuse pour rester actif en arrière-plan. Tu peux la masquer dans les paramètres système.</string>
+    <string name="permission_notification_explanation_cta">Autoriser</string>
+
+</resources>

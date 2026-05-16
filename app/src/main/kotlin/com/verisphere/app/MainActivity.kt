@@ -1,11 +1,16 @@
 package com.verisphere.app
 
+import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityManager
@@ -13,6 +18,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.VisibleForTesting
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
@@ -24,12 +30,15 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.verisphere.app.accessibility.VeriSphereAccessibilityService
 import com.verisphere.app.bubble.BubbleOverlayService
 import com.verisphere.app.bubble.EXTRA_BUBBLE_ANCHOR_X_PX
 import com.verisphere.app.bubble.EXTRA_SESSION_ID
+import com.verisphere.app.onboarding.OnboardingOrchestrator
+import com.verisphere.app.storage.SecureStorage
 import com.verisphere.app.storage.SessionRecord
 import com.verisphere.app.ui.detail.AnchoredDetailPanel
 import com.verisphere.app.ui.detail.DetailPanelContent
@@ -37,10 +46,15 @@ import com.verisphere.app.ui.detail.buildSourceLinkIntent
 import com.verisphere.app.ui.history.HistoryScreen
 import com.verisphere.app.ui.history.HistoryScreenIntent
 import com.verisphere.app.ui.onboarding.AccessibilityExplanationScreen
+import com.verisphere.app.ui.onboarding.OnboardingTutorialOverlay
 import com.verisphere.app.ui.onboarding.PermissionExplanationScreen
+import com.verisphere.app.ui.onboarding.PermissionVariant
 import com.verisphere.app.ui.theme.VeriSphereTheme
 import com.verisphere.app.util.tag
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Single-Activity host for VeriSphere.
@@ -96,6 +110,17 @@ class MainActivity : ComponentActivity() {
     private var overlayGranted: Boolean by mutableStateOf(false)
     private var accessibilityServiceEnabled: Boolean by mutableStateOf(false)
 
+    // Story 5.2 — first-launch + permission orchestration state.
+    // `notificationGranted` flips when ContextCompat re-checks
+    // POST_NOTIFICATIONS on API 33+ (always true on API < 33 since the
+    // permission is install-time-granted on older OS releases). The
+    // tutorial / asked flags survive cold-start via SecureStorage and
+    // are seeded asynchronously in onCreate (CDN #8 — first-access
+    // Keystore stall lives on Dispatchers.IO).
+    private var notificationGranted: Boolean by mutableStateOf(true)
+    private var tutorialSeen: Boolean by mutableStateOf(false)
+    private var notificationPermissionAsked: Boolean by mutableStateOf(false)
+
     // Story 2.4 — Detail panel state. The bubble service routes a tap
     // here via Intent.ACTION_VIEW + EXTRA_SESSION_ID; onCreate /
     // onNewIntent parse it into pendingDetailSessionId; onResume's
@@ -105,34 +130,142 @@ class MainActivity : ComponentActivity() {
     private var detailBubbleAnchorXPx: Int by mutableStateOf(0)
     private var pendingDetailSessionId: String? = null
 
+    // Story 5.2 — Story 5.1 D2 host-side debounce (Task 6.2). Settings-
+    // launching CTAs can be double-tapped on devices that suppress the
+    // task-stack dedupe. Guard with a monotonic-wall-clock timestamp;
+    // a Compose Button is not debounced and the user's finger naturally
+    // produces sub-100 ms second taps when impatient.
+    private var lastSettingsLaunchAt: Long = 0L
+
+    // Story 5.2 — Orchestrator instance, wired with SecureStorage's
+    // boolean read/write seams (mirrors RateLimitRepositoryImpl /
+    // HistoryRepositoryImpl construction patterns from AppContainer).
+    // Late-init because the AppContainer is only safely accessible after
+    // `attachBaseContext` (i.e., onCreate). Read-only after onCreate.
+    private lateinit var secureStorage: SecureStorage
+    private lateinit var orchestrator: OnboardingOrchestrator
+
+    /**
+     * Story 5.2 — POST_NOTIFICATIONS runtime-permission launcher (API
+     * 33+). MUST be initialized at class scope per CDN #7: AndroidX
+     * Activity Result API requires `registerForActivityResult` to be
+     * called before the Activity reaches `STARTED` lifecycle state,
+     * which happens between `onCreate` return and `onStart`. A
+     * property initializer is the canonical safe site.
+     */
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        // CDN #6 — write the "asked" flag regardless of the user's
+        // grant/deny choice. The flag captures that the OS dialog was
+        // shown, not what the user picked. Subsequent onResume re-checks
+        // will pick up `notificationGranted` from the actual permission
+        // state via ContextCompat.checkSelfPermission.
+        //
+        // Story 5.2 code-review P7 — the SecureStorage write is wrapped
+        // in `NonCancellable + Dispatchers.IO` because the activity may
+        // be destroyed between the launcher callback firing and the
+        // write completing (lifecycleScope cancellation surface).
+        // NonCancellable matches the symmetric P4 pattern used by
+        // `onTutorialComplete` / `onTutorialSkip` for the critical
+        // single-write flag persistence.
+        notificationGranted = granted
+        notificationPermissionAsked = true
+        lifecycleScope.launch {
+            withContext(NonCancellable + Dispatchers.IO) {
+                orchestrator.markNotificationPermissionAsked()
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        secureStorage = (application as VeriSphereApplication).container.secureStorage
+        orchestrator = OnboardingOrchestrator(
+            readBoolean = secureStorage::readBoolean,
+            writeBoolean = secureStorage::writeBoolean,
+        )
+
         overlayGranted = Settings.canDrawOverlays(this)
         accessibilityServiceEnabled = isAccessibilityServiceEnabled()
+        notificationGranted = checkNotificationPermission()
         resolvePendingDetailSession(intent)
+
+        // Story 5.2 code-review P1 — seed the SecureStorage-backed flags
+        // SYNCHRONOUSLY before `setContent`. The prior implementation
+        // launched a `lifecycleScope.launch { withContext(Dispatchers.IO) }`
+        // async seed, which produced a visible tutorial flash on every
+        // steady-state cold start (returning user with `tutorial_seen=true`
+        // saw the tutorial mounted for ~50-200 ms while the IO read
+        // completed). Synchronous reads block onCreate for the one-time
+        // Keystore first-access cost (architecture L34-37) which is
+        // already budgeted by NFR3 (<1 s cold-start). Three small
+        // `readBoolean` calls do not change the budget materially and
+        // eliminate the race window entirely.
+        tutorialSeen = orchestrator.isTutorialSeen()
+        notificationPermissionAsked = orchestrator.isNotificationPermissionAsked()
 
         setContent {
             VeriSphereTheme {
-                // Story 2.4 — Box overlay: the existing 3-state gating
-                // UI is the BASE layer; the detail panel mounts ON TOP
-                // when detailRecordToShow is non-null. The panel uses
-                // M3 ModalBottomSheet's stock dismiss semantics (back,
-                // swipe-down, scrim-tap) — no BackHandler override.
+                // Story 5.2 — four-state onboarding-aware cascade
+                // (extends Story 1.6 + 1.8.5 three-state pattern). Order
+                // is mandatory per CDN #9:
+                //   1. Notification not granted (API 33+) — blocks first.
+                //   2. Overlay not granted.
+                //   3. Accessibility off AND tutorial-seen — post-onboarding
+                //      revocation fallback (Story 1.8.5 screen reused
+                //      per CDN #5).
+                //   4. Tutorial not seen yet — first-launch tutorial
+                //      (Story 5.1 composable, accessibility activated
+                //      via card 1).
+                //   5. else — steady-state HistoryScreen.
                 //
-                // P6 — the panel render is gated on the same permission
-                // predicate used in tryOpenPendingDetailPanel. Without
-                // this guard, a stale detailRecordToShow surviving a
-                // permission revocation would mount the panel on top of
-                // PermissionExplanationScreen / AccessibilityExplanationScreen,
-                // hiding the recovery affordance.
+                // P6 — the DetailPanelHost layer renders ON TOP of the
+                // cascade body, gated on overlay+accessibility (Story
+                // 2.4 panel-state cleanup). It will NOT mount during the
+                // tutorial because the tutorial owns the full screen as
+                // a `when {}` branch, not a sibling layer.
+                // Story 5.2 — under the `bypassGatesForTest` androidTest
+                // hook (BuildConfig.DEBUG only), force the three
+                // permission gates true so the cascade reaches the
+                // `!tutorialSeen` / steady-state branch. Mirrors the
+                // pre-existing pattern used by `panelGateOpen` below for
+                // Story 2.4 / 4.4 detail-panel tests. Production
+                // behaviour is unchanged (the `testBypass` short-circuit
+                // is structurally unreachable in release APKs because
+                // `BuildConfig.DEBUG` constant-folds to `false`).
+                val testBypass = BuildConfig.DEBUG && bypassGatesForTest
+                val overlayOk = overlayGranted || testBypass
+                val notificationOk = notificationGranted || testBypass
+                val accessibilityOk = accessibilityServiceEnabled || testBypass
                 Box {
                     when {
-                        !overlayGranted -> PermissionExplanationScreen(onExit = ::finish)
-                        !accessibilityServiceEnabled -> AccessibilityExplanationScreen(
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationOk -> PermissionExplanationScreen(
+                            variant = PermissionVariant.NOTIFICATION,
+                            onPrimaryClick = ::requestNotificationPermission,
+                            onExit = ::finish,
+                        )
+                        !overlayOk -> PermissionExplanationScreen(
+                            variant = PermissionVariant.OVERLAY,
+                            onPrimaryClick = ::launchOverlaySettings,
+                            onExit = ::finish,
+                        )
+                        !accessibilityOk && tutorialSeen -> AccessibilityExplanationScreen(
                             onActivateClick = ::launchAccessibilitySettings,
                             onExitClick = ::finish,
+                        )
+                        !tutorialSeen -> OnboardingTutorialOverlay(
+                            accessibilityServiceEnabled = accessibilityOk,
+                            onActivateAccessibilityClick = ::launchAccessibilitySettings,
+                            onComplete = ::onTutorialComplete,
+                            onSkip = ::onTutorialSkip,
+                            // CDN #11 — `null` cut-out for first launch:
+                            // the bubble service has not started yet, so
+                            // no real anchor exists. The composable
+                            // renders scrim-only when `null`.
+                            bubbleAnchorOffset = null,
                         )
                         else -> HistoryScreen(
                             // Story 4.4 — tapping a history row resolves
@@ -298,10 +431,22 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         // The user may have returned from any system Settings screen
-        // (overlay permission OR accessibility list). Re-check both
-        // gates so the UI flips between the three states.
+        // (overlay permission OR accessibility list OR app-notification
+        // settings). Re-check all three gates so the UI flips between
+        // the four states.
         overlayGranted = Settings.canDrawOverlays(this)
         accessibilityServiceEnabled = isAccessibilityServiceEnabled()
+        notificationGranted = checkNotificationPermission()
+
+        // Story 5.2 code-review P8 — reset the Settings-launch debounce
+        // every time the user returns to MainActivity (from any Settings
+        // round-trip). The prior implementation kept a single timestamp
+        // across `launchOverlaySettings` and `launchAccessibilitySettings`
+        // calls, which blocked legitimate sequential CTAs (e.g. user
+        // grants overlay → returns → cascade mounts tutorial Card 1 →
+        // taps "Activer" within 500 ms → silently dropped). Resetting
+        // on onResume restores the user's "fresh interaction" semantic.
+        lastSettingsLaunchAt = 0L
 
         // Story 2.4 — Resolve any pending detail-panel session id. The
         // lookup hits HistoryRepository's in-memory cache (loaded by the
@@ -310,15 +455,30 @@ class MainActivity : ComponentActivity() {
         // call returns sub-millisecond.
         tryOpenPendingDetailPanel()
 
-        // Once both gates pass, start the bubble service. Idempotent —
-        // `startForegroundService` on an already-running service just
-        // routes through `onStartCommand` with a null intent, which is
-        // handled by Story 1.7's lifecycle-flicker guard. Wrapped in
-        // try/catch per code-review patch P5: Android 12+ may throw
+        // Story 5.2 — three-condition service-start gate per AC #4 /
+        // CDN #2: canDrawOverlays AND (SDK < 33 OR POST_NOTIFICATIONS)
+        // AND isAccessibilityServiceEnabled. Architecture D5.13 + D2.11.
+        // Idempotent — `startForegroundService` on an already-running
+        // service just routes through `onStartCommand` with a null
+        // intent (Story 1.7 lifecycle-flicker guard). Wrapped in
+        // try/catch per Story 1.8.5 P5: Android 12+ may throw
         // `ForegroundServiceStartNotAllowedException` if the activity
-        // is resumed under doze / restricted bucket. We log and
-        // continue — the next user interaction will re-trigger.
-        if (overlayGranted && accessibilityServiceEnabled) {
+        // is resumed under doze / restricted bucket.
+        //
+        // Story 5.2 code-review P6 — additionally gated on `tutorialSeen`
+        // so the bubble service does NOT start during the tutorial.
+        // Without this gate, the user's Card-1 "Activer" → Settings
+        // round-trip → onResume re-checks accessibility-true → service
+        // starts → real bubble appears visually OVER tutorial Cards 2-4
+        // (which has `bubbleAnchorOffset = null` and renders no cut-out
+        // around the now-present bubble).
+        if (tutorialSeen &&
+            OnboardingOrchestrator.canStartBubbleService(
+                overlayGranted = overlayGranted,
+                notificationGranted = notificationGranted,
+                accessibilityEnabled = accessibilityServiceEnabled,
+            )
+        ) {
             try {
                 ContextCompat.startForegroundService(
                     this,
@@ -332,6 +492,126 @@ class MainActivity : ComponentActivity() {
                 // bubble doesn't start until the next onResume.
                 Log.w(TAG, "startForegroundService denied (background-FGS restriction?)", e)
             }
+        }
+
+        // Story 5.2 code-review DN1 (P15) — `tryMarkFirstLaunchComplete`
+        // was removed via YAGNI cleanup. The `first_launch_completed`
+        // flag was written but never read; the cascade decisions are
+        // made entirely on `tutorialSeen` + permission booleans. If a
+        // V2 story needs a "have we ever fully onboarded" gate, it can
+        // be re-derived from the existing flags at call time.
+
+        // Story 5.2 — auto-request POST_NOTIFICATIONS on first launch
+        // (API 33+ only). Suppresses re-prompting per CDN #6: the flag
+        // captures that the dialog has been SHOWN, not the outcome. The
+        // gate `!notificationPermissionAsked` short-circuits subsequent
+        // onResume calls in the same install. The `bypassGatesForTest`
+        // guard (BuildConfig.DEBUG only) prevents the OS dialog from
+        // claiming focus during instrumented tests — without it, the
+        // dialog pushes MainActivity to PAUSED and `createAndroidComposeRule`
+        // never sees the RESUMED state required to query the Compose
+        // tree.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !notificationGranted &&
+            !notificationPermissionAsked &&
+            !(BuildConfig.DEBUG && bypassGatesForTest)
+        ) {
+            requestNotificationPermission()
+        }
+    }
+
+    /**
+     * Story 5.2 — Returns the current POST_NOTIFICATIONS permission
+     * state. On API < 33 the permission is install-time-granted, so the
+     * three-condition service-start gate trivially short-circuits this
+     * branch via `apiLevel < 33` per CDN #2 second clause. We still
+     * return `true` here to keep the Compose-state representation
+     * consistent across API levels (so the `when {}` cascade does not
+     * stall on a `false` reading that the gate would otherwise ignore).
+     */
+    private fun checkNotificationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        return ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * Story 5.2 — Trigger the runtime POST_NOTIFICATIONS dialog via the
+     * field-initialized launcher (CDN #7). The launcher callback writes
+     * the `notification_permission_asked` flag and updates the
+     * `notificationGranted` Compose state on the user's response.
+     *
+     * Story 5.2 code-review P3 — After Android's automatic "Don't ask
+     * again" kicks in (post-second-deny on API 33+), the launcher's
+     * `launch()` no-ops silently with `granted=false` and the user is
+     * soft-locked on `PermissionExplanationScreen.PermissionVariant.NOTIFICATION`.
+     * Detect this state via `!shouldShowRequestPermissionRationale &&
+     * notificationPermissionAsked` and deep-link to the system's
+     * per-app notification settings instead (mirrors `launchOverlaySettings`
+     * pattern). The same `settingsLaunchDebounceOpen()` guard prevents
+     * rapid double-taps from spawning multiple Settings instances.
+     */
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val twiceDeniedLockout = notificationPermissionAsked &&
+            !ActivityCompat.shouldShowRequestPermissionRationale(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS,
+            )
+        if (twiceDeniedLockout) {
+            launchAppNotificationSettings()
+        } else {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    /**
+     * Story 5.2 code-review P3 — Settings deep-link for per-app
+     * notification permission, used when the OS has put the user in
+     * the twice-denied lockout state (CDN #6 + P3 fix). Mirrors the
+     * `launchOverlaySettings` pattern with the same debounce guard.
+     */
+    private fun launchAppNotificationSettings() {
+        if (!settingsLaunchDebounceOpen()) return
+        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+        try {
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "ACTION_APP_NOTIFICATION_SETTINGS not resolvable on this device", e)
+            Toast.makeText(
+                this,
+                R.string.permission_settings_unavailable,
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+
+    /**
+     * Story 5.2 — Settings deep-link for the overlay permission. The
+     * Story 1.6 inline launch from `PermissionExplanationScreen` was
+     * relocated here as part of the stateless-callbacks refactor
+     * (CDN #1). 500 ms debounce guard mirrors [launchAccessibilitySettings]
+     * for symmetry (Task 6.2 — closes Story 5.1 D2 partially: same
+     * surface, same risk).
+     */
+    private fun launchOverlaySettings() {
+        if (!settingsLaunchDebounceOpen()) return
+        val intent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:$packageName"),
+        )
+        try {
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "ACTION_MANAGE_OVERLAY_PERMISSION not resolvable on this device", e)
+            Toast.makeText(
+                this,
+                R.string.permission_settings_unavailable,
+                Toast.LENGTH_LONG,
+            ).show()
         }
     }
 
@@ -347,6 +627,11 @@ class MainActivity : ComponentActivity() {
         // PermissionExplanationScreen (Story 1.6) — keep the Settings
         // screen in MainActivity's task so Back returns here and
         // triggers the re-check in onResume.
+        //
+        // Story 5.2 Task 6.2 — 500 ms debounce closes Story 5.1 D2
+        // (Activer-CTA double-tap on stripped OEMs that don't dedupe
+        // the Settings task-stack entry).
+        if (!settingsLaunchDebounceOpen()) return
         try {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         } catch (e: ActivityNotFoundException) {
@@ -359,6 +644,77 @@ class MainActivity : ComponentActivity() {
                 R.string.accessibility_settings_unavailable,
                 Toast.LENGTH_LONG,
             ).show()
+        }
+    }
+
+    /**
+     * Story 5.2 Task 6.2 — host-side debounce gate closing Story 5.1 D2
+     * (Activer CTA double-tap). A Compose `Button` does not natively
+     * debounce; rapid double-taps on Settings-launching CTAs may
+     * produce two `startActivity` calls before the task-stack dedupe
+     * kicks in, especially on stripped OEM ROMs that intermittently
+     * miss the dedupe. 500 ms monotonic-clock minimum interval blocks
+     * the second tap without affecting any realistic user interaction.
+     *
+     * Story 5.2 code-review P2 — uses [SystemClock.uptimeMillis] (monotonic
+     * since boot, immune to wall-clock changes) instead of
+     * `System.currentTimeMillis`. The prior wall-clock implementation
+     * could break on NTP sync / user time-zone change: backward jump →
+     * `now - lastSettingsLaunchAt` becomes negative which is `< 500L`
+     * → permanent debounce closure; forward jump → debounce bypassed.
+     *
+     * @return `true` if enough time has elapsed since the last launch
+     *   and the caller should proceed; `false` if the call should be
+     *   silently dropped.
+     */
+    private fun settingsLaunchDebounceOpen(): Boolean {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastSettingsLaunchAt < SETTINGS_LAUNCH_DEBOUNCE_MS) return false
+        lastSettingsLaunchAt = now
+        return true
+    }
+
+    /**
+     * Story 5.2 — Tutorial completion (Card 4 "Got it"). Persists
+     * `tutorial_seen = true` per AC #9 / CDN #4 (single-show invariant)
+     * and flips the Compose state so the `when {}` cascade falls
+     * through to `HistoryScreen` on the next recomposition. `onResume`
+     * subsequently evaluates the three-condition service-start gate
+     * which now also requires `tutorialSeen=true` per P6.
+     *
+     * Story 5.2 code-review P4 — the SecureStorage write is wrapped in
+     * `withContext(NonCancellable + Dispatchers.IO)` because the
+     * activity may be destroyed (low memory / force-stop / rotation +
+     * config-change race) between `lifecycleScope.launch` and the
+     * actual `prefs.edit().putBoolean(...).apply()` call. Without
+     * `NonCancellable`, `lifecycleScope` cancellation could drop the
+     * write → flag never persisted → next launch shows tutorial again
+     * → AC #9 / CDN #4 single-show invariant violated. The write is
+     * install-lifetime, not activity-lifetime — `NonCancellable` is
+     * the canonical Kotlin coroutines pattern for critical writes.
+     */
+    private fun onTutorialComplete() {
+        lifecycleScope.launch {
+            withContext(NonCancellable + Dispatchers.IO) {
+                orchestrator.markTutorialSeen()
+            }
+            tutorialSeen = true
+        }
+    }
+
+    /**
+     * Story 5.2 — Tutorial skip (Cards 2-4 "Skip"). Same persistence
+     * contract as [onTutorialComplete] — AC #9 / CDN #4 documents both
+     * paths setting the same flag. Card 1 has no skip per Story 5.1
+     * AC #3 (cannot reach this path from card 1). Same P4
+     * `NonCancellable` wrap as [onTutorialComplete].
+     */
+    private fun onTutorialSkip() {
+        lifecycleScope.launch {
+            withContext(NonCancellable + Dispatchers.IO) {
+                orchestrator.markTutorialSeen()
+            }
+            tutorialSeen = true
         }
     }
 
@@ -418,6 +774,14 @@ class MainActivity : ComponentActivity() {
          */
         @VisibleForTesting
         var bypassGatesForTest: Boolean = false
+
+        /**
+         * Story 5.2 Task 6.2 — wall-clock minimum interval between two
+         * consecutive Settings launches via [launchAccessibilitySettings]
+         * or [launchOverlaySettings]. Closes Story 5.1 D2 (Activer CTA
+         * double-tap surface on stripped OEM ROMs).
+         */
+        private const val SETTINGS_LAUNCH_DEBOUNCE_MS: Long = 500L
 
         private val TAG = tag("MainActivity")
     }
