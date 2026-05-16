@@ -24,12 +24,12 @@
 
 # Keep generated $$serializer companions for any @Serializable type.
 # The wildcard com.verisphere.app.** is preserved here pending Stories
-# 1.10 + 6.1 (HistoryRepository, VersionChecker) which will introduce
-# additional @Serializable types in storage/ and update/. Story 1.9's
-# narrowed rules below provide explicit coverage for the gemini/ +
-# storage/SessionRecord types we ship today (closing the Story 1.1
-# deferred-work item "Narrow ProGuard -keep rules to packages with
-# @Serializable types").
+# 1.10 (HistoryRepository) which will introduce additional @Serializable
+# types in storage/. Story 1.9's narrowed rules below provide explicit
+# coverage for the gemini/ + storage/SessionRecord types and Story 6.1's
+# block adds update/ — closing the Story 1.1 deferred-work item "Narrow
+# ProGuard -keep rules to packages with @Serializable types" for the
+# update channel.
 -keep,includedescriptorclasses class com.verisphere.app.**$$serializer { *; }
 
 # Keep companions that expose serializer() factories.
@@ -58,6 +58,18 @@
 }
 -keep,allowobfuscation,allowshrinking class com.verisphere.app.storage.SessionRecord { *; }
 -keepclassmembers class com.verisphere.app.storage.SessionRecord {
+    public static **$Companion Companion;
+}
+
+# ──────────────────────────────────────────────────────────────────────
+# Story 6.1 — narrowed @Serializable keep rules for update/VersionInfo.
+# Mirrors the Story 1.9 gemini/ + Story 1.10 storage/SessionRecord
+# pattern. The wildcard com.verisphere.app.**$$serializer rule at
+# line 33 is the safety net; this narrowing makes the surface explicit.
+# ──────────────────────────────────────────────────────────────────────
+-keep,allowobfuscation,allowshrinking class com.verisphere.app.update.** { *; }
+-keep class com.verisphere.app.update.**$Companion { *; }
+-keepclassmembers class com.verisphere.app.update.** {
     public static **$Companion Companion;
 }
 

@@ -9,6 +9,10 @@ import com.verisphere.app.storage.RateLimitRepository
 import com.verisphere.app.storage.RateLimitRepositoryImpl
 import com.verisphere.app.storage.SecureStorage
 import com.verisphere.app.storage.SessionRecord
+import com.verisphere.app.update.VersionChecker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -132,9 +136,40 @@ class AppContainer(private val applicationContext: Context) {
         )
     }
 
-    // TODO Story 6.1: val versionChecker: VersionChecker by lazy {
-    //     VersionChecker(httpClient)
-    // }
+    /**
+     * Story 6.1 — single talker to `raw.githubusercontent.com` for the
+     * version-info JSON (architecture line 752-753 boundary discipline,
+     * AR18, D3.9). Lambda-seam wiring (Story 6.1 CDN #1): production
+     * passes `secureStorage::writeString` + `secureStorage::clear` so
+     * the `SecureStorage` import never reaches the `update/` package.
+     *
+     * Inherits the shared [httpClient] (CDN #8 — single OkHttp client
+     * per architecture L844). Reads [BuildConfig.VERSION_NAME] via the
+     * default parameter at construction (CDN #7).
+     */
+    val versionChecker: VersionChecker by lazy {
+        VersionChecker(
+            httpClient = httpClient,
+            writeString = secureStorage::writeString,
+            clearKey = secureStorage::clear,
+        )
+    }
+
+    /**
+     * Story 6.1 — process-lifetime coroutine scope for fire-and-forget
+     * background work that must outlive any Activity (e.g. the
+     * `VersionChecker.checkForUpdates` call from
+     * [com.verisphere.app.VeriSphereApplication.onCreate]).
+     *
+     * `SupervisorJob` so a single failure does not cancel sibling
+     * launches. `Dispatchers.IO` as the default — individual launches
+     * can override. NEVER use `GlobalScope` directly: detekt's
+     * architecture-mandated rule (`detekt.yml` ForbiddenMethodCall +
+     * project policy at architecture L159) bans it.
+     */
+    val applicationScope: CoroutineScope by lazy {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    }
 
     // BubbleStateMachine and CapturePipeline live inside BubbleOverlayService
     // (Stories 1.6, 1.8) — owned by the service, not by AppContainer.
