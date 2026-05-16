@@ -76,6 +76,14 @@ import kotlinx.coroutines.launch
  * onboarding orchestration (Stories 5.1's tutorial + permission
  * sequencing + first-launch detection).
  *
+ * Story 4.4 wired `HistoryScreen.onItemClick` to [openHistoryRecord]
+ * which resolves the tapped row's `recordId` via
+ * `HistoryRepository.getById` and mounts the same [DetailPanelHost]
+ * used by the Verdict×Tap path — FR17 (read-only re-open) is
+ * satisfied by construction (no "Verify again" button exists in
+ * [com.verisphere.app.ui.detail.DetailPanelContent]) and FR18 is
+ * satisfied because `getById` hits the in-memory cache, no network.
+ *
  * The bubble service may route the user back here via
  * [ACTION_REQUEST_ACCESSIBILITY] when a long-press happens but the
  * accessibility service is off — `onNewIntent` brings the activity
@@ -127,11 +135,13 @@ class MainActivity : ComponentActivity() {
                             onExitClick = ::finish,
                         )
                         else -> HistoryScreen(
-                            // Story 4.4 will replace this no-op with a
-                            // read-only DetailPanelHost open for the
-                            // tapped record id. Story 4.1's contract is
-                            // the scaffold + ViewModel state surface only.
-                            onItemClick = { /* Story 4.4 wires read-only panel open */ },
+                            // Story 4.4 — tapping a history row resolves
+                            // the record via `HistoryRepository.getById`
+                            // and mounts the same `DetailPanelHost` used
+                            // by the Verdict×Tap path (Story 2.4),
+                            // satisfying FR17 (read-only re-open) +
+                            // FR18 (offline history; in-memory cache).
+                            onItemClick = ::openHistoryRecord,
                             onBackClick = ::finish,
                         )
                     }
@@ -235,6 +245,52 @@ class MainActivity : ComponentActivity() {
                 // Verdict emission and tap). Silent log; panel does
                 // not open.
                 Log.w(TAG, "getById($pending) returned null — record evicted or never persisted")
+            }
+        }
+    }
+
+    /**
+     * Story 4.4 — Activity-side handler for `HistoryItemRow.onClick`
+     * (wired from [com.verisphere.app.ui.history.HistoryScreen]'s
+     * `onItemClick` lambda parameter, passed in at the `setContent`
+     * call site above).
+     *
+     * Resolves [recordId] against [com.verisphere.app.storage.HistoryRepository.getById]
+     * on `lifecycleScope` (suspending on `Dispatchers.IO` inside the
+     * repository), then flips [detailRecordToShow] into the same
+     * [DetailPanelHost] composable already used by the Verdict×Tap flow
+     * (Story 2.4). The panel renders identically to a live verdict —
+     * FR17 (read-only re-open) is satisfied by construction because
+     * [com.verisphere.app.ui.detail.DetailPanelContent] does not render
+     * a "Verify again" / "Refresh" button.
+     *
+     * **`detailBubbleAnchorXPx = 0` rationale** — there is no live
+     * bubble at panel-open time (the user tapped a list row, not a
+     * bubble). On the V1 default
+     * (`BuildConfig.USE_STANDARD_BOTTOM_SHEET = true`) the anchor is
+     * IGNORED by [com.verisphere.app.ui.detail.AnchoredDetailPanel] (the
+     * `takeAnchoredPath` branch is `false` whenever the flag is `true`).
+     * On the experimental edge-anchored flag-flip, `0` resolves to
+     * `LEFT` emergence — acceptable, the user did not tap a bubble so
+     * there is no spatial expectation. Story 4.4 spec Critical Dev
+     * Note #3.
+     *
+     * **Null fall-through** — `getById` returns `null` on FIFO eviction
+     * (architecture D1.3, 500-entry cap) or process-restart edge where
+     * the cache is mid-load. Silent `Log.w` + no panel mount, mirroring
+     * the Story 2.4 [tryOpenPendingDetailPanel] precedent. The V1.x
+     * "NOT FOUND flash" variant tracked in `deferred-work.md` C1 is out
+     * of Story 4.4 scope.
+     */
+    private fun openHistoryRecord(recordId: String) {
+        val container = (application as VeriSphereApplication).container
+        lifecycleScope.launch {
+            val record = container.historyRepository.getById(recordId)
+            if (record != null) {
+                detailBubbleAnchorXPx = 0
+                detailRecordToShow = record
+            } else {
+                Log.w(TAG, "openHistoryRecord($recordId) returned null — record evicted")
             }
         }
     }
