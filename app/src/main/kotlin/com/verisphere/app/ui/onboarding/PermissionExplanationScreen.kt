@@ -18,6 +18,48 @@ import androidx.compose.ui.tooling.preview.Preview
 import com.verisphere.app.R
 import com.verisphere.app.ui.theme.VSSpacing
 import com.verisphere.app.ui.theme.VeriSphereTheme
+import java.util.Locale
+
+/**
+ * Story 5.3 / AR26 / D5.8 — manufacturers whose battery managers
+ * aggressively kill foreground services. Matched case-insensitively
+ * against `Build.MANUFACTURER.lowercase(Locale.ROOT)`. Limited to 8
+ * manufacturers initially (architecture L991 / L1006); expand based on
+ * user reports.
+ *
+ * Lowercase only — match-time uses `.lowercase(Locale.ROOT)` per
+ * Story 5.3 CDN #2 (Turkish dotless-i hazard would break "İ" → "i"
+ * matching on Turkish locales if `Locale.getDefault()` were used).
+ *
+ * Co-located with [PermissionExplanationScreen] per epics line 846 and
+ * architecture L991: "documenting the list in
+ * `ui/onboarding/PermissionExplanationScreen.kt` (or a const file)
+ * avoids future ambiguity".
+ */
+val HOSTILE_OEMS: Set<String> = setOf(
+    "samsung",
+    "xiaomi",
+    "huawei",
+    "honor",
+    "oppo",
+    "vivo",
+    "realme",
+    "oneplus",
+)
+
+/**
+ * Story 5.3 — pure helper that decides whether [manufacturer] (as
+ * provided by `Build.MANUFACTURER` at the call site) belongs to the
+ * [HOSTILE_OEMS] closed set. Case-insensitive via
+ * `lowercase(Locale.ROOT)` per CDN #2.
+ *
+ * Pure-function form (no `Build.MANUFACTURER` read inside) so JVM unit
+ * tests can exercise the boolean algebra without Robolectric — mirrors
+ * [OnboardingOrchestrator.canStartBubbleService]'s `apiLevel` injection
+ * pattern (Story 5.2 lambda-seam discipline).
+ */
+fun isHostileOem(manufacturer: String): Boolean =
+    manufacturer.lowercase(Locale.ROOT) in HOSTILE_OEMS
 
 /**
  * Permission-explanation surface shown by [com.verisphere.app.MainActivity]

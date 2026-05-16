@@ -10,6 +10,9 @@
    - Notification-permission denial → PermissionExplanationScreen with
      PermissionVariant.NOTIFICATION on Android 13+ when POST_NOTIFICATIONS
      denied (Story 5.2 AC #2).
+   - Battery-optimisation deep-link prompt → BatteryOptimizationBottomSheet
+     on hostile OEMs at first-launch completion (Story 5.3 AC #3, AR26,
+     D5.8).
 
   Post-onboarding accessibility-revocation fallback (Story 5.2 AC #3 /
   CDN #5) reuses the existing `accessibility_explanation_*` keys from
@@ -31,5 +34,13 @@
     <string name="permission_notification_explanation_title">Activer les notifications</string>
     <string name="permission_notification_explanation_body">VeriSphere a besoin d\'envoyer une notification silencieuse pour rester actif en arrière-plan. Tu peux la masquer dans les paramètres système.</string>
     <string name="permission_notification_explanation_cta">Autoriser</string>
+
+    <!-- Story 5.3 — Battery-optimisation deep-link explainer (AR26, D5.8).
+         Shown as an M3 ModalBottomSheet on hostile OEMs after first-launch
+         onboarding completes. Single-show invariant via SecureStorage
+         `battery_optimization_prompted` flag. -->
+    <string name="battery_optimization_explainer">Sur certains téléphones, le système peut arrêter VeriSphere en arrière-plan. Pour garder la bulle active, désactive l\'optimisation batterie pour VeriSphere.</string>
+    <string name="battery_optimization_open_settings">Ouvrir les paramètres batterie</string>
+    <string name="battery_settings_unavailable">Cet appareil n\'expose pas l\'écran d\'optimisation batterie. Désactive l\'optimisation pour VeriSphere via les Settings système.</string>
 
 </resources>

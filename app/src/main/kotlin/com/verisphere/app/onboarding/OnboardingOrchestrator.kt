@@ -21,7 +21,7 @@ import android.os.Build
  * `AppContainer`. JVM tests pass any pair of pure-Kotlin lambdas (e.g.
  * a `MutableMap<String, Boolean>` backing).
  *
- * **Two persisted flags** (both `SecureStorage.readBoolean` /
+ * **Three persisted flags** (all `SecureStorage.readBoolean` /
  * `writeBoolean`, default `false`):
  *
  *  - `tutorial_seen` — set on `OnboardingTutorialOverlay.onComplete`
@@ -32,6 +32,13 @@ import android.os.Build
  *    `ActivityResultContracts.RequestPermission` callback regardless
  *    of grant/deny outcome (CDN #6). Suppresses re-prompting per
  *    Android 13+ runtime-permission contract (architecture D2.6).
+ *  - `battery_optimization_prompted` (Story 5.3 AR26 / D5.8) — set
+ *    when the [BatteryOptimizationBottomSheet] is dismissed via any
+ *    path (scrim tap / swipe-down / Back / primary CTA). Single-show
+ *    invariant per Story 5.3 AC #5 ("regardless of whether the user
+ *    actually disabled optimisation"). Only relevant on hostile OEMs
+ *    (Story 5.3 HOSTILE_OEMS const); on non-hostile devices the flag
+ *    is never written.
  *
  * **Code-review YAGNI decision (DN1, 2026-05-16)**: the originally-specified
  * `first_launch_completed` "master gate" flag was removed because nothing
@@ -86,9 +93,29 @@ class OnboardingOrchestrator(
         writeBoolean(KEY_NOTIFICATION_PERMISSION_ASKED, true)
     }
 
+    /**
+     * Story 5.3 AR26 / D5.8 — has the battery-optimisation bottom-sheet
+     * been shown and dismissed at least once? Single-show invariant per
+     * Story 5.3 AC #5.
+     */
+    fun isBatteryOptimizationPrompted(): Boolean =
+        readBoolean(KEY_BATTERY_OPTIMIZATION_PROMPTED, false)
+
+    /**
+     * Story 5.3 AR26 / D5.8 — persist the single-show invariant. Callers
+     * MUST wrap this write in `withContext(NonCancellable + Dispatchers.IO)`
+     * (Story 5.2 P4 / P7 / Story 5.3 CDN #5 pattern) because the activity
+     * may be destroyed between the dismissal gesture and the
+     * `prefs.edit().putBoolean(...).apply()` completion.
+     */
+    fun markBatteryOptimizationPrompted() {
+        writeBoolean(KEY_BATTERY_OPTIMIZATION_PROMPTED, true)
+    }
+
     companion object {
         const val KEY_TUTORIAL_SEEN: String = "tutorial_seen"
         const val KEY_NOTIFICATION_PERMISSION_ASKED: String = "notification_permission_asked"
+        const val KEY_BATTERY_OPTIMIZATION_PROMPTED: String = "battery_optimization_prompted"
 
         /**
          * Pure-function form of the AC #4 / CDN #2 service-start gate.

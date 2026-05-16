@@ -46,9 +46,11 @@ import com.verisphere.app.ui.detail.buildSourceLinkIntent
 import com.verisphere.app.ui.history.HistoryScreen
 import com.verisphere.app.ui.history.HistoryScreenIntent
 import com.verisphere.app.ui.onboarding.AccessibilityExplanationScreen
+import com.verisphere.app.ui.onboarding.BatteryOptimizationBottomSheet
 import com.verisphere.app.ui.onboarding.OnboardingTutorialOverlay
 import com.verisphere.app.ui.onboarding.PermissionExplanationScreen
 import com.verisphere.app.ui.onboarding.PermissionVariant
+import com.verisphere.app.ui.onboarding.isHostileOem
 import com.verisphere.app.ui.theme.VeriSphereTheme
 import com.verisphere.app.util.tag
 import kotlinx.coroutines.Dispatchers
@@ -120,6 +122,15 @@ class MainActivity : ComponentActivity() {
     private var notificationGranted: Boolean by mutableStateOf(true)
     private var tutorialSeen: Boolean by mutableStateOf(false)
     private var notificationPermissionAsked: Boolean by mutableStateOf(false)
+
+    // Story 5.3 — hostile-OEM battery-optimisation prompt single-show
+    // flag (AR26, D5.8). Synchronously seeded in onCreate per CDN #6
+    // (P1 sync-seed pattern). Flipped to true in
+    // [onBatteryOptimizationDismiss] BEFORE the SecureStorage write
+    // resolves so the Compose recomposition drops the bottom-sheet
+    // immediately, with the IO write completing in NonCancellable +
+    // Dispatchers.IO (CDN #5).
+    private var batteryOptimizationPrompted: Boolean by mutableStateOf(false)
 
     // Story 2.4 — Detail panel state. The bubble service routes a tap
     // here via Intent.ACTION_VIEW + EXTRA_SESSION_ID; onCreate /
@@ -206,6 +217,10 @@ class MainActivity : ComponentActivity() {
         // eliminate the race window entirely.
         tutorialSeen = orchestrator.isTutorialSeen()
         notificationPermissionAsked = orchestrator.isNotificationPermissionAsked()
+        // Story 5.3 CDN #6 — synchronous seed, same rationale as the
+        // two flags above (eliminates flash on cold start for returning
+        // users on hostile OEMs who already dismissed the sheet).
+        batteryOptimizationPrompted = orchestrator.isBatteryOptimizationPrompted()
 
         setContent {
             VeriSphereTheme {
@@ -286,6 +301,27 @@ class MainActivity : ComponentActivity() {
                             record = record,
                             bubbleAnchorXPx = detailBubbleAnchorXPx,
                             onDismiss = { detailRecordToShow = null },
+                        )
+                    }
+                    // Story 5.3 — hostile-OEM battery-optimisation
+                    // bottom-sheet (AR26, D5.8). Mounted as a sibling
+                    // layer per CDN #7 (NOT a new cascade branch — the
+                    // sheet overlays HistoryScreen, it does not replace
+                    // it). The 4-AND gate is consolidated in
+                    // [shouldShowBatteryOptimizationPrompt] so the
+                    // test-bypass-aware booleans (overlayOk /
+                    // notificationOk / accessibilityOk) and the
+                    // hostile-OEM detection compose correctly per
+                    // CDN #10.
+                    if (shouldShowBatteryOptimizationPrompt(
+                            overlayOk = overlayOk,
+                            notificationOk = notificationOk,
+                            accessibilityOk = accessibilityOk,
+                        )
+                    ) {
+                        BatteryOptimizationBottomSheet(
+                            onOpenSettings = ::launchBatteryOptimizationSettings,
+                            onDismiss = ::onBatteryOptimizationDismiss,
                         )
                     }
                 }
@@ -437,6 +473,17 @@ class MainActivity : ComponentActivity() {
         overlayGranted = Settings.canDrawOverlays(this)
         accessibilityServiceEnabled = isAccessibilityServiceEnabled()
         notificationGranted = checkNotificationPermission()
+        // Story 5.3 — re-read the persisted flag so a write from the
+        // previous resumed lifecycle (or a force-stop-and-relaunch
+        // edge case) is reflected before recomposition evaluates the
+        // sibling-layer gate. Sticky-OR: once the in-memory flag is
+        // `true`, never revert to `false` from disk — defends the
+        // post-dismissal race where the IO write hasn't yet committed
+        // before a Settings round-trip's `onResume` re-read fires
+        // (code-review P2 — would otherwise re-mount the sheet after a
+        // user dismissed it).
+        batteryOptimizationPrompted = batteryOptimizationPrompted ||
+            orchestrator.isBatteryOptimizationPrompted()
 
         // Story 5.2 code-review P8 — reset the Settings-launch debounce
         // every time the user returns to MainActivity (from any Settings
@@ -718,6 +765,125 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Story 5.3 — combined 4-AND gate (AR26, D5.8) deciding whether the
+     * [BatteryOptimizationBottomSheet] mounts as a sibling layer over
+     * [com.verisphere.app.ui.history.HistoryScreen]. Pure boolean
+     * algebra, no side effects.
+     *
+     * The four conditions (all must be true):
+     *   1. `tutorialSeen` — onboarding is complete (CDN #7: sheet
+     *      overlays HistoryScreen, the steady-state surface).
+     *   2. `canStartBubbleService(...)` — the three permission gates
+     *      have passed (`overlayOk && (apiLevel < 33 || notificationOk)
+     *      && accessibilityOk`).
+     *   3. [isHostileOem] returns `true` for the device's
+     *      `Build.MANUFACTURER` (or the test bypass override per
+     *      CDN #8).
+     *   4. `!batteryOptimizationPrompted` — single-show invariant
+     *      (AC #5): once dismissed, never re-shown.
+     *
+     * CDN #10 — the caller passes the test-bypass-AWARE booleans
+     * (`overlayOk`, `notificationOk`, `accessibilityOk`) so that under
+     * `bypassGatesForTest = true`, the three permission gates are
+     * forced true. Otherwise the AVD's actual permission state would
+     * keep the sheet from mounting under instrumented test.
+     */
+    private fun shouldShowBatteryOptimizationPrompt(
+        overlayOk: Boolean,
+        notificationOk: Boolean,
+        accessibilityOk: Boolean,
+    ): Boolean {
+        // Capture the static-mutable companion field into a local val
+        // before dereferencing — defends the TOCTOU race where a test
+        // could null the field between the `!= null` check and the
+        // dereference on a different instrumentation thread (code-review
+        // P3). Also defends `Build.MANUFACTURER`'s Kotlin platform-type
+        // nullability via Elvis — buggy kernels can return `null` even
+        // though the Android docs say non-null (code-review P5).
+        val testOverride = bypassManufacturerForTest
+        val manufacturer = if (BuildConfig.DEBUG && testOverride != null) {
+            testOverride
+        } else {
+            Build.MANUFACTURER ?: ""
+        }
+        return tutorialSeen &&
+            OnboardingOrchestrator.canStartBubbleService(
+                overlayGranted = overlayOk,
+                notificationGranted = notificationOk,
+                accessibilityEnabled = accessibilityOk,
+            ) &&
+            isHostileOem(manufacturer) &&
+            !batteryOptimizationPrompted
+    }
+
+    /**
+     * Story 5.3 — primary CTA handler for the battery-optimisation
+     * bottom-sheet. Launches the system Settings list of
+     * battery-optimisation-eligible apps (AR26, D5.8 — NOT the
+     * `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` direct-dialog
+     * action which would require the forbidden
+     * `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` permission per CDN #3).
+     *
+     * **CDN #12 persist-BEFORE-Settings ordering**: this method invokes
+     * [onBatteryOptimizationDismiss] BEFORE the `startActivity` call so
+     * the single-show invariant survives a process kill that may happen
+     * while the user is in Settings (low-memory OEM aggressive killers,
+     * force-stop). AC #5 explicitly says "regardless of whether the
+     * user actually disabled optimisation".
+     *
+     * Reuses [settingsLaunchDebounceOpen] for the rapid-double-tap
+     * guard (Story 5.2 P2 / P8 — monotonic-clock + onResume reset).
+     */
+    private fun launchBatteryOptimizationSettings() {
+        if (!settingsLaunchDebounceOpen()) return
+        // CDN #12 — persist BEFORE startActivity so process kill in
+        // Settings still preserves the single-show invariant.
+        onBatteryOptimizationDismiss()
+        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        try {
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Log.w(
+                TAG,
+                "ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS not resolvable on this device",
+                e,
+            )
+            Toast.makeText(
+                this,
+                R.string.battery_settings_unavailable,
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+
+    /**
+     * Story 5.3 — dismissal handler for the battery-optimisation
+     * bottom-sheet. Persists `battery_optimization_prompted = true`
+     * via [OnboardingOrchestrator.markBatteryOptimizationPrompted].
+     *
+     * **CDN #5 `NonCancellable + Dispatchers.IO` wrap**: mirrors Story
+     * 5.2 P4 / P7 pattern ([onTutorialComplete] above). The write is
+     * install-lifetime — if the activity is destroyed (low memory /
+     * force-stop / rotation race) between this method firing and the
+     * `prefs.edit().putBoolean(...).apply()` completion, the flag
+     * would be lost → next launch shows the sheet again → AC #5
+     * single-show invariant violated.
+     *
+     * Flip Compose state synchronously (before the coroutine
+     * dispatches) so the next recomposition drops the sheet
+     * immediately — the IO write completing later only updates the
+     * on-disk state, the in-memory state is already correct.
+     */
+    private fun onBatteryOptimizationDismiss() {
+        batteryOptimizationPrompted = true
+        lifecycleScope.launch {
+            withContext(NonCancellable + Dispatchers.IO) {
+                orchestrator.markBatteryOptimizationPrompted()
+            }
+        }
+    }
+
     private fun isAccessibilityServiceEnabled(): Boolean {
         val ourPackage = packageName
         val ourClass = VeriSphereAccessibilityService::class.java.name
@@ -774,6 +940,23 @@ class MainActivity : ComponentActivity() {
          */
         @VisibleForTesting
         var bypassGatesForTest: Boolean = false
+
+        /**
+         * Story 5.3 — Test-only override of `Build.MANUFACTURER` so
+         * `MainActivityBatteryOptimizationTest` can simulate a hostile
+         * OEM (e.g. `"samsung"`) on the AVD which actually returns
+         * `"Google"`. Read inside
+         * [shouldShowBatteryOptimizationPrompt] under a
+         * `BuildConfig.DEBUG && bypassManufacturerForTest != null`
+         * guard — release builds dead-code-eliminate the branch via
+         * constant-folding (CDN #8).
+         *
+         * **MUST remain `null` in production.** No production code path
+         * sets it. The test source set sets it via `@BeforeClass` and
+         * resets to `null` via `@AfterClass`.
+         */
+        @VisibleForTesting
+        var bypassManufacturerForTest: String? = null
 
         /**
          * Story 5.2 Task 6.2 — wall-clock minimum interval between two

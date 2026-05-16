@@ -1,5 +1,6 @@
 package com.verisphere.app.onboarding
 
+import com.verisphere.app.onboarding.OnboardingOrchestrator.Companion.KEY_BATTERY_OPTIMIZATION_PROMPTED
 import com.verisphere.app.onboarding.OnboardingOrchestrator.Companion.KEY_NOTIFICATION_PERMISSION_ASKED
 import com.verisphere.app.onboarding.OnboardingOrchestrator.Companion.KEY_TUTORIAL_SEEN
 import org.junit.Assert.assertEquals
@@ -146,5 +147,43 @@ class OnboardingOrchestratorTest {
                 apiLevel = 33,
             ),
         )
+    }
+
+    // ─── Story 5.3 — battery-optimisation flag (AR26, D5.8) ─────────
+
+    @Test
+    fun `isBatteryOptimizationPrompted returns false when storage flag is absent`() {
+        val store = FakeBooleanStore()
+        val orch = newOrchestrator(store)
+        assertFalse(orch.isBatteryOptimizationPrompted())
+    }
+
+    @Test
+    fun `isBatteryOptimizationPrompted returns true when storage flag is true`() {
+        val store = FakeBooleanStore().apply { write(KEY_BATTERY_OPTIMIZATION_PROMPTED, true) }
+        val orch = newOrchestrator(store)
+        assertTrue(orch.isBatteryOptimizationPrompted())
+    }
+
+    @Test
+    fun `markBatteryOptimizationPrompted writes the flag to storage`() {
+        val store = FakeBooleanStore()
+        val orch = newOrchestrator(store)
+        orch.markBatteryOptimizationPrompted()
+        assertEquals(true, store.get(KEY_BATTERY_OPTIMIZATION_PROMPTED))
+    }
+
+    @Test
+    fun `markBatteryOptimizationPrompted does not touch tutorial_seen or notification_permission_asked`() {
+        // Cross-key isolation check — mirrors L77-79 pattern for
+        // `markNotificationPermissionAsked`. Three Story 5.x flags
+        // share the same SecureStorage prefs file (D1.4 single-file
+        // posture) so accidental cross-write would be a real bug.
+        val store = FakeBooleanStore()
+        val orch = newOrchestrator(store)
+        orch.markBatteryOptimizationPrompted()
+        assertEquals(true, store.get(KEY_BATTERY_OPTIMIZATION_PROMPTED))
+        assertFalse(orch.isTutorialSeen())
+        assertFalse(orch.isNotificationPermissionAsked())
     }
 }
