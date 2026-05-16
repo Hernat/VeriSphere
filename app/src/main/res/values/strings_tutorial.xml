@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VeriSphere tutorial strings — Story 5.1 (UX-DR17, UX spec § Copy Guidelines).
+  Kept in a dedicated file (architecture § Resource organisation) because the
+  onboarding copy is high-stakes for the first-launch impression. All entries
+  merge into the same R.string.* namespace as strings.xml and strings_verdict.xml.
+
+  Story 5.1 amendment (Sprint Change 2026-05-07): tutorial expanded from 3 to
+  4 cards. Card 1 = Accessibility activation (new); cards 2-4 = gesture demos.
+
+  Verbatim source: tutorial_card_1_body is the EXACT same phrase as
+  R.string.accessibility_explanation_body (Story 1.8.5). Two keys with one
+  value is deliberate (CDN #5) so the namespacing per file stays readable
+  and Story 7.5's translation pass updates both keys in lockstep.
+
+  TODO Story 7.5: add description="…" attributes for translation pass.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Story 5.1 — Card 1: Accessibility activation (UX-DR11 amended for Sprint Change 2026-05-07). -->
+    <string name="tutorial_card_1_title">Activer VeriSphere Accessibility</string>
+    <string name="tutorial_card_1_body">VeriSphere lit l\'écran que tu vérifies — rien d\'autre. Pas de lecture en arrière-plan. Pas d\'actions automatiques. Désactivable à tout moment dans Settings.</string>
+    <string name="tutorial_card_1_cta_activate">Activer</string>
+    <string name="tutorial_card_1_waiting_hint">VeriSphere s\'activera une fois que tu reviendras des Settings…</string>
+    <string name="tutorial_card_1_a11y">Card 1 of 4: Activate VeriSphere Accessibility</string>
+
+    <!-- Story 5.1 — Card 2: Long-press to fact-check (UX-DR11 amended; gesture demo). -->
+    <string name="tutorial_card_2_title">Long-press to fact-check</string>
+    <string name="tutorial_card_2_body">Hold the bubble for 1 second over anything you want to verify.</string>
+    <string name="tutorial_card_2_a11y">Card 2 of 4: Long-press to fact-check</string>
+
+    <!-- Story 5.1 — Card 3: Drag to move the bubble (UX-DR11 amended; gesture demo). -->
+    <string name="tutorial_card_3_title">Drag to move the bubble</string>
+    <string name="tutorial_card_3_body">The bubble snaps to whichever edge feels right.</string>
+    <string name="tutorial_card_3_a11y">Card 3 of 4: Drag to move the bubble</string>
+
+    <!-- Story 5.1 — Card 4: Tap to see your past fact-checks (UX-DR11 amended; gesture demo). -->
+    <string name="tutorial_card_4_title">Tap to see your past fact-checks</string>
+    <string name="tutorial_card_4_body">Every verdict stays in your local history. No account, no cloud.</string>
+    <string name="tutorial_card_4_a11y">Card 4 of 4: Tap to see your past fact-checks</string>
+
+    <!-- Story 5.1 — Shared CTAs across cards (UX spec § Button Hierarchy, line 735). -->
+    <string name="tutorial_cta_next">Next</string>
+    <string name="tutorial_cta_got_it">Got it</string>
+    <string name="tutorial_cta_skip">Skip</string>
+</resources>
