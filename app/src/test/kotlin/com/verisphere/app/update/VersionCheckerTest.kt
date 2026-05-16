@@ -61,7 +61,10 @@ class VersionCheckerTest {
         server.shutdown()
     }
 
-    private fun newChecker(currentVersion: String = "0.1.0"): VersionChecker {
+    private fun newChecker(
+        currentVersion: String = "0.1.0",
+        notifyUpdateAvailableChanged: (String?) -> Unit = {},
+    ): VersionChecker {
         val client = OkHttpClient.Builder()
             .connectTimeout(SHORT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(SHORT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -74,6 +77,7 @@ class VersionCheckerTest {
             clearKey = { k -> clearCalls.add(k) },
             currentVersionName = currentVersion,
             versionInfoUrl = server.url("/version-info.json").toString(),
+            notifyUpdateAvailableChanged = notifyUpdateAvailableChanged,
         )
     }
 
@@ -338,6 +342,135 @@ class VersionCheckerTest {
         // exceeds the cap (would be a build-time error per gradle parse),
         // isNewerSemVer returns false defensively.
         assertFalse("current side out-of-range", isNewerSemVer("1.0.0", "201.0.0"))
+    }
+
+    // ─── Story 6.2 — notifyUpdateAvailableChanged seam tests ─────────────
+
+    @Test
+    fun `notifyUpdateAvailableChanged is invoked with null on strictly-older published version`() = runTest {
+        // Code-review patch P2 (2026-05-16) — locks the strict-greater
+        // branch of `isNewerSemVer` separately from the equal-version
+        // path. A future off-by-one error (e.g. `>=` vs `>`) would slip
+        // through the equal-version test but be caught here. Downgrade-
+        // safety: debug build with VERSION_NAME above server should NOT
+        // trigger an "update available" notification.
+        val notifications = mutableListOf<String?>()
+        server.enqueue(
+            MockResponse().setResponseCode(HTTP_OK).setBody(
+                """{"latestVersion":"0.0.5","downloadUrl":"https://x","releasedAt":"2026-04-01"}""",
+            ),
+        )
+        val checker = newChecker(
+            currentVersion = "0.1.0",
+            notifyUpdateAvailableChanged = { notifications.add(it) },
+        )
+
+        val result = checker.checkForUpdates()
+
+        assertNotNull(result)
+        assertEquals("0.0.5", result!!.latestVersion)
+        assertEquals(listOf<String?>(null), notifications)
+    }
+
+    @Test
+    fun `notifyUpdateAvailableChanged is invoked with latestVersion on happy-path write`() = runTest {
+        val notifications = mutableListOf<String?>()
+        server.enqueue(
+            MockResponse().setResponseCode(HTTP_OK).setBody(
+                """{"latestVersion":"1.0.0","downloadUrl":"https://drive.google.com/x","releasedAt":"2026-06-01"}""",
+            ),
+        )
+        val checker = newChecker(
+            currentVersion = "0.1.0",
+            notifyUpdateAvailableChanged = { notifications.add(it) },
+        )
+
+        checker.checkForUpdates()
+
+        assertEquals(listOf("1.0.0"), notifications)
+    }
+
+    @Test
+    fun `notifyUpdateAvailableChanged is invoked with null on equal-version clear`() = runTest {
+        val notifications = mutableListOf<String?>()
+        server.enqueue(
+            MockResponse().setResponseCode(HTTP_OK).setBody(
+                """{"latestVersion":"0.1.0","downloadUrl":"https://x","releasedAt":"2026-05-16"}""",
+            ),
+        )
+        val checker = newChecker(
+            currentVersion = "0.1.0",
+            notifyUpdateAvailableChanged = { notifications.add(it) },
+        )
+
+        checker.checkForUpdates()
+
+        assertEquals(listOf<String?>(null), notifications)
+    }
+
+    @Test
+    fun `notifyUpdateAvailableChanged is invoked with null on non-https downloadUrl rejection`() = runTest {
+        val notifications = mutableListOf<String?>()
+        server.enqueue(
+            MockResponse().setResponseCode(HTTP_OK).setBody(
+                """{"latestVersion":"1.0.0","downloadUrl":"http://insecure.example/x","releasedAt":"2026-06-01"}""",
+            ),
+        )
+        val checker = newChecker(
+            currentVersion = "0.1.0",
+            notifyUpdateAvailableChanged = { notifications.add(it) },
+        )
+
+        val result = checker.checkForUpdates()
+
+        assertNull(result) // patch P3 — non-https returns null
+        assertEquals(listOf<String?>(null), notifications)
+    }
+
+    @Test
+    fun `notifyUpdateAvailableChanged is NOT invoked on transient network failure`() = runTest {
+        // CDN #4 — failure paths must NEVER mutate the flow, otherwise a
+        // user losing connection mid-launch would lose a perfectly valid
+        // in-memory update-dot signal set on the previous successful launch.
+        val notifications = mutableListOf<String?>()
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+        val checker = newChecker(
+            currentVersion = "0.1.0",
+            notifyUpdateAvailableChanged = { notifications.add(it) },
+        )
+
+        val result = checker.checkForUpdates()
+
+        assertNull(result)
+        assertEquals(emptyList<String?>(), notifications)
+    }
+
+    @Test
+    fun `notifyUpdateAvailableChanged is NOT invoked on HTTP 404`() = runTest {
+        val notifications = mutableListOf<String?>()
+        server.enqueue(MockResponse().setResponseCode(HTTP_NOT_FOUND))
+        val checker = newChecker(
+            notifyUpdateAvailableChanged = { notifications.add(it) },
+        )
+
+        val result = checker.checkForUpdates()
+
+        assertNull(result)
+        assertEquals(emptyList<String?>(), notifications)
+    }
+
+    @Test
+    fun `notifyUpdateAvailableChanged is NOT invoked on malformed JSON`() = runTest {
+        val notifications = mutableListOf<String?>()
+        server.enqueue(MockResponse().setResponseCode(HTTP_OK).setBody("{not valid"))
+        val checker = newChecker(
+            notifyUpdateAvailableChanged = { notifications.add(it) },
+        )
+
+        val result = checker.checkForUpdates()
+
+        assertNull(result)
+        assertEquals(emptyList<String?>(), notifications)
     }
 
     @Test

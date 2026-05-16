@@ -76,6 +76,21 @@ class VersionChecker(
     private val clearKey: (String) -> Unit,
     private val currentVersionName: String = BuildConfig.VERSION_NAME,
     private val versionInfoUrl: String = VERSION_INFO_URL,
+    /**
+     * Story 6.2 — invoked AFTER each `writeString` / `clearKey` of the
+     * update-available state to mirror the persisted value into the
+     * in-process [kotlinx.coroutines.flow.MutableStateFlow] held by
+     * [com.verisphere.app.AppContainer]. Default no-op so existing
+     * Story 6.1 JVM tests continue to compile unchanged.
+     *
+     * **Contract** (CDN #4): invoked ONLY on the three state-mutating
+     * branches (happy-path write / https-rejection clear / equal-or-older
+     * clear). NEVER invoked on failure paths (network / non-200 /
+     * malformed JSON / missing field) — those return `null` with NO
+     * state mutation, and surfacing `null` here would CLEAR a perfectly
+     * valid in-memory state on transient connectivity loss.
+     */
+    private val notifyUpdateAvailableChanged: (latestVersion: String?) -> Unit = {},
 ) {
 
     // Code-review patch P2 — `coerceInputValues` intentionally absent.
@@ -139,14 +154,17 @@ class VersionChecker(
                 Log.w(TAG, "rejected non-https downloadUrl")
                 clearKey(KEY_UPDATE_AVAILABLE_VERSION)
                 clearKey(KEY_UPDATE_AVAILABLE_DOWNLOAD_URL)
+                notifyUpdateAvailableChanged(null)
                 return@withContext null
             }
             writeString(KEY_UPDATE_AVAILABLE_VERSION, parsed.latestVersion)
             writeString(KEY_UPDATE_AVAILABLE_DOWNLOAD_URL, parsed.downloadUrl)
+            notifyUpdateAvailableChanged(parsed.latestVersion)
             Log.i(TAG, "update available: ${parsed.latestVersion}")
         } else {
             clearKey(KEY_UPDATE_AVAILABLE_VERSION)
             clearKey(KEY_UPDATE_AVAILABLE_DOWNLOAD_URL)
+            notifyUpdateAvailableChanged(null)
             Log.d(
                 TAG,
                 "no newer version (latest=${parsed.latestVersion}, current=$currentVersionName)",

@@ -38,6 +38,13 @@
     <!-- Story 4.2 — HistoryScreen empty-state glyph a11y (UX-DR18, NFR12). -->
     <string name="history_empty_glyph_content_description">VeriSphere bubble</string>
 
+    <!-- Story 6.2 — UpdateBanner / bubble update-dot overlay (FR23, UX-DR10,
+         UX spec line 620 + 701). %1$s = SemVer string from version-info.json. -->
+    <string name="update_banner_text">Version %1$s available</string>
+    <string name="update_banner_download">Download</string>
+    <string name="update_banner_dismiss_content_description">Dismiss update banner</string>
+    <string name="bubble_update_available_dot_content_description">Update available</string>
+
     <!-- Story 1.8.5 — VeriSphereAccessibilityService (architecture D5.13, AR27, D2.11; UX-DR17 warm-tone copy) -->
     <string name="accessibility_service_label">VeriSphere</string>
     <string name="accessibility_service_description">VeriSphere capture l\'écran que tu vérifies par long-press. Pas de lecture en arrière-plan, pas d\'actions automatiques. Désactivable à tout moment dans Settings.</string>

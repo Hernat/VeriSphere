@@ -13,6 +13,9 @@ import com.verisphere.app.update.VersionChecker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -152,7 +155,57 @@ class AppContainer(private val applicationContext: Context) {
             httpClient = httpClient,
             writeString = secureStorage::writeString,
             clearKey = secureStorage::clear,
+            notifyUpdateAvailableChanged = { latestVersion ->
+                _updateAvailableVersion.value = latestVersion
+            },
         )
+    }
+
+    /**
+     * Story 6.2 — backing `MutableStateFlow` mirroring the persisted
+     * `update_available_version` SecureStorage key. Initial value is read
+     * once at first access (lazy).
+     *
+     * **First-subscriber stall caveat** (code-review patch P6, 2026-05-16):
+     * the lazy keeps the read OUT of `Application.onCreate` (preserving
+     * NFR3 cold-start budget THERE), but the cost LANDS at the first
+     * subscriber. Today that's `BubbleOverlayService.setContent` which
+     * runs on the main thread — first composition can stall 50-200 ms
+     * on the Keystore-backed `EncryptedSharedPreferences` first-touch
+     * per [com.verisphere.app.storage.SecureStorage] L35. This is a
+     * documented limitation (deferred-work D1, Story 6.2 review); a V1.x
+     * fix would emit asynchronously via `flowOn(Dispatchers.IO)` and an
+     * initial-value coroutine.
+     *
+     * Mutations originate from [VersionChecker] via the lambda seam
+     * wired in [versionChecker] above.
+     *
+     * Single-writer discipline (CDN #11): only `VersionChecker` writes
+     * to this flow. `private` so no consumer can do `.value = ...`
+     * directly — the public surface is [updateAvailableVersion].
+     */
+    private val _updateAvailableVersion: MutableStateFlow<String?> by lazy {
+        MutableStateFlow(secureStorage.readString(VersionChecker.KEY_UPDATE_AVAILABLE_VERSION))
+    }
+
+    /**
+     * Story 6.2 — read-only StateFlow exposing the in-process mirror of
+     * the persisted `update_available_version`. Consumed by
+     * [com.verisphere.app.bubble.BubbleOverlayService] (dot-on-bubble)
+     * and by Story 6.3's `HistoryScreen` wiring (banner visibility
+     * predicate). The boolean `hasUpdate` derives from `value != null`.
+     *
+     * **Why a StateFlow, not synchronous SecureStorage reads** (CDN #3):
+     * the launch-time `VersionChecker.checkForUpdates()` runs
+     * fire-and-forget on `applicationScope` (Story 6.1 Task 4). It can
+     * complete AFTER the bubble service is up; subscribers MUST observe
+     * the transition reactively. A `secureStorage.readString(...)` per
+     * recomposition would also hit EncryptedSharedPreferences on every
+     * Compose frame, violating architecture L468 "no parallel state
+     * primitives".
+     */
+    val updateAvailableVersion: StateFlow<String?> by lazy {
+        _updateAvailableVersion.asStateFlow()
     }
 
     /**

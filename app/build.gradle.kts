@@ -182,6 +182,8 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    // Story 6.2 — Icons.Outlined.Info + Icons.Outlined.Close for UpdateBanner.
+    implementation(libs.androidx.compose.material.icons.extended)
 
     // ─── Encrypted local storage (D1.6, NFR6) ───────────────────────────
     implementation(libs.androidx.security.crypto)

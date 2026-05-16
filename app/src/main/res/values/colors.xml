@@ -33,4 +33,8 @@
     <!-- Privacy padlock — deliberately distinct from vs_verdict_true (UX Step 8) -->
     <color name="vs_privacy_padlock">#34A853</color>
 
+    <!-- Story 6.2 — Update-available dot on bubble (UX spec L620:
+         "#9AA0A6, 8 dp, upper-right edge"). Light variant. -->
+    <color name="vs_update_dot">#9AA0A6</color>
+
 </resources>

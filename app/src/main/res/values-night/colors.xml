@@ -35,4 +35,7 @@
     <!-- Privacy padlock -->
     <color name="vs_privacy_padlock">#81C995</color>
 
+    <!-- Story 6.2 — Update-available dot on bubble (epics L892 dark variant). -->
+    <color name="vs_update_dot">#5F6368</color>
+
 </resources>

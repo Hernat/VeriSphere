@@ -524,6 +524,14 @@ class BubbleOverlayService :
             setContent {
                 VeriSphereTheme {
                     val state by bubbleStateMachine.state.collectAsState()
+                    // Story 6.2 — reactive update-available signal sourced
+                    // from AppContainer.updateAvailableVersion (mirrors
+                    // SecureStorage via VersionChecker's notify-seam).
+                    // collectAsState recomposes the bubble Box when
+                    // VersionChecker writes/clears the keys — i.e. when
+                    // the launch fetch completes after the bubble service
+                    // is already up.
+                    val updateVersion by container.updateAvailableVersion.collectAsState()
                     BubbleOverlay(
                         state = state,
                         onUserActivity = ::onBubbleUserActivity,
@@ -541,6 +549,7 @@ class BubbleOverlayService :
                         // is needed; Compose treats the captured value
                         // as a constant for this composition.
                         reduceMotion = bubbleStateMachine.reduceMotionEnabled,
+                        hasUpdateAvailable = updateVersion != null,
                     )
                 }
             }

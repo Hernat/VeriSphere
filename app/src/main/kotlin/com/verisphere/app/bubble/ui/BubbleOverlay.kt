@@ -9,10 +9,12 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
@@ -33,6 +35,7 @@ import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -128,6 +131,12 @@ fun BubbleOverlay(
     onDragEnd: () -> Unit,
     modifier: Modifier = Modifier,
     reduceMotion: Boolean = false,
+    // Story 6.2 — when `true`, an 8 dp circular dot is rendered on the
+    // upper-right edge of the visible 56 dp bubble (orthogonal overlay
+    // state per epics L892; NOT a new BubbleState variant). Source of
+    // truth: AppContainer.updateAvailableVersion mirrored from
+    // SecureStorage.readString(VersionChecker.KEY_UPDATE_AVAILABLE_VERSION).
+    hasUpdateAvailable: Boolean = false,
 ) {
     val density = LocalDensity.current
     val contentDescriptionText = bubbleContentDescriptionFor(state)
@@ -221,28 +230,42 @@ fun BubbleOverlay(
             },
         contentAlignment = Alignment.Center,
     ) {
-        // The 56 dp visible bubble. Alpha + pulse scale apply only to
-        // this layer — the halo Box is invisible.
-        Surface(
-            modifier = Modifier
-                .size(BUBBLE_DIAMETER_DP)
-                .clip(CircleShape)
-                .alpha(animatedAlpha)
-                .scale(pulseScale.value)
-                .semantics {
-                    contentDescription = contentDescriptionText
-                },
-            color = bubbleBackground,
+        // Story 6.2 — 56 dp inner Box wraps the visible bubble + the
+        // orthogonal update-available dot so the dot anchors to the
+        // upper-right edge of the bubble (not the 104 dp halo). The
+        // Surface keeps its existing alpha/scale modifiers; the dot is
+        // static (does NOT pulse with Pressing, does NOT fade with
+        // Idle.faded — composed outside the alpha/scale on the Surface).
+        Box(
+            modifier = Modifier.size(BUBBLE_DIAMETER_DP),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
+            // The 56 dp visible bubble. Alpha + pulse scale apply only to
+            // this layer — the halo Box is invisible.
+            Surface(
+                modifier = Modifier
+                    .size(BUBBLE_DIAMETER_DP)
+                    .clip(CircleShape)
+                    .alpha(animatedAlpha)
+                    .scale(pulseScale.value)
+                    .semantics {
+                        contentDescription = contentDescriptionText
+                    },
+                color = bubbleBackground,
             ) {
-                Text(
-                    text = "G",
-                    style = MaterialTheme.typography.headlineMedium.copy(fontSize = 24.sp),
-                    color = MaterialTheme.colorScheme.onPrimary,
-                )
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "G",
+                        style = MaterialTheme.typography.headlineMedium.copy(fontSize = 24.sp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                    )
+                }
+            }
+            if (hasUpdateAvailable) {
+                UpdateAvailableDot(modifier = Modifier.align(Alignment.TopEnd))
             }
         }
 
@@ -257,6 +280,36 @@ fun BubbleOverlay(
             else -> Unit
         }
     }
+}
+
+/**
+ * Story 6.2 — 8 dp circular dot anchored to the upper-right edge of the
+ * visible bubble. Orthogonal to [BubbleState] — does NOT pulse with
+ * Pressing and does NOT fade with Idle.faded (composed outside the
+ * alpha/scale modifiers on the visible Surface).
+ *
+ * Color: [R.color.vs_update_dot] — `#9AA0A6` light, `#5F6368` dark
+ * (epics L892 + UX spec L620).
+ *
+ * **A11y posture** (CDN #10): the dot carries its OWN
+ * `contentDescription` ("Update available") as a separate semantic
+ * node. The bubble's primary `contentDescription` is unchanged —
+ * TalkBack will announce both as it focuses each. Material `Badge`
+ * precedent; concatenating into the bubble description would
+ * re-announce the update on every state transition (noise).
+ */
+@Composable
+private fun UpdateAvailableDot(modifier: Modifier = Modifier) {
+    val description = stringResource(R.string.bubble_update_available_dot_content_description)
+    Box(
+        modifier = modifier
+            .offset(x = UPDATE_DOT_OFFSET_X_DP, y = UPDATE_DOT_OFFSET_Y_DP)
+            .size(UPDATE_DOT_DIAMETER_DP)
+            .clip(CircleShape)
+            .background(colorResource(R.color.vs_update_dot))
+            .testTag(TEST_TAG_BUBBLE_UPDATE_DOT)
+            .semantics { contentDescription = description },
+    )
 }
 
 @Composable
@@ -489,6 +542,27 @@ private val BUBBLE_DIAMETER_DP = 56.dp
 
 // 56 dp visible bubble + 24 dp halo on each side = 104 dp window.
 private val BUBBLE_HALO_DIAMETER_DP = 104.dp
+
+// Story 6.2 — 8 dp update-available dot (epics L892, UX spec L620).
+private val UPDATE_DOT_DIAMETER_DP = 8.dp
+
+// Story 6.2 — offset from the 56 dp inner Box's TopEnd corner. With
+// Alignment.TopEnd, an 8 dp Box anchors at (right=56, top=0). Adding
+// offset(-2, 2) shifts the dot to:
+//   - right edge at 56 - 2 = 54 dp (2 dp inset from bubble's right edge)
+//   - top edge   at 0  + 2 = 2 dp  (2 dp inset from bubble's top edge)
+//   - centre     at (50, 6) within the 56 dp bubble
+// The dot sits visually NEAR (not exactly on) the upper-right edge,
+// avoiding pixel-clip on the bubble's CircleShape and staying INSIDE
+// the 56 dp bubble bounds (CDN #6 — never overflows the 24 dp halo
+// region that intercepts near-miss taps).
+//
+// Code-review patch P4 (2026-05-16) corrected the original geometry
+// comment (which claimed "right edge at 56" — off by 2 dp).
+private val UPDATE_DOT_OFFSET_X_DP = (-2).dp
+private val UPDATE_DOT_OFFSET_Y_DP = 2.dp
+
+internal const val TEST_TAG_BUBBLE_UPDATE_DOT: String = "bubble_update_dot"
 
 private const val FADE_DURATION_MS = 300
 
@@ -1074,6 +1148,40 @@ private fun BubbleOverlayReduceMotionThinkingDarkPreview() {
             onTap = {}, onTapNearMiss = {}, onLongPress = {},
             onDragDelta = { _, _ -> }, onDragEnd = {},
             reduceMotion = true,
+        )
+    }
+}
+
+// ─── Story 6.2 — bubble + update-dot previews (AC #11) ─────────────────
+
+@Preview(showBackground = true, name = "Idle opaque + update dot - Light")
+@Composable
+private fun BubbleOverlayIdleOpaqueWithUpdateDotLightPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Idle(faded = false),
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+            hasUpdateAvailable = true,
+        )
+    }
+}
+
+@Preview(
+    showBackground = true,
+    name = "Idle opaque + update dot - Dark",
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun BubbleOverlayIdleOpaqueWithUpdateDotDarkPreview() {
+    VeriSphereTheme {
+        BubbleOverlay(
+            state = BubbleState.Idle(faded = false),
+            onUserActivity = {}, onLongPressStart = {}, onPressCancelled = {},
+            onTap = {}, onTapNearMiss = {}, onLongPress = {},
+            onDragDelta = { _, _ -> }, onDragEnd = {},
+            hasUpdateAvailable = true,
         )
     }
 }
