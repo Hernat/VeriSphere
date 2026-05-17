@@ -66,7 +66,11 @@ The canonical procedure is the project's distribution flow. Steps marked *(once 
    - `MAJOR` is reserved: do not tag `1.0.0` until the founder substitution success criterion is validated for ≥ 1 week.
 2. **Run the release build.** `./gradlew :app:assembleRelease`. Output lands at `app/build/outputs/apk/release/app-release.apk` (signed once the keystore is wired in Story 7.3) or `app-release-unsigned.apk` (during pre-V1 development).
 3. **Verify APK size ≤ 10 MB (NFR2).** macOS / Linux: `wc -c < app/build/outputs/apk/release/app-release.apk`. Windows: `(Get-Item app/build/outputs/apk/release/app-release.apk).Length`. If the APK exceeds the budget, **stop** and audit the recent dependency additions before proceeding.
-4. **Run the injection-corpus regression.** Execute `./scripts/run_injection_corpus.sh` and verify zero regressions against the curated injection corpus. This consumes ~30 Gemini Flash calls per run × N corpus revisions — see the [SECURITY.md quota note](./SECURITY.md#anti-injection-corpus-runner--quota-note). Mandatory before tagging a release. *(Pre-Story-7.1 releases skip this step; document the skip in the CHANGELOG.)* On Windows, run from Git Bash with ImageMagick installed (`choco install imagemagick`) and jq (`choco install jq`).
+4. **Run the injection-corpus regression.** Execute `./scripts/run_injection_corpus.sh` against the curated injection corpus. This consumes ~30 Gemini Flash calls per run × N corpus revisions — see the [SECURITY.md quota note](./SECURITY.md#anti-injection-corpus-runner--quota-note). Two acceptance thresholds (Story 7.1 CDN #11):
+   - **Pre-V1 patch releases (0.x.y):** pass rate ≥ 90% acceptable iff every FAIL is triaged in `_bmad-output/implementation-artifacts/deferred-work.md` per CDN #11 (a) tighten case / (b) remove case / (c) Story-7.x prompt-hardening follow-up. Override the strict gate via `EXIT_THRESHOLD=90 ./scripts/run_injection_corpus.sh`.
+   - **V1.0.0-RC tag-time hardening (epics L939):** 100% pass mandatory. Default `./scripts/run_injection_corpus.sh` (no env var) exits 1 on ANY regression.
+
+   On Windows, run from Git Bash with ImageMagick installed (`choco install imagemagick`) and jq (`choco install jq`).
 5. **Tag the release.** Once `version.properties` and `CHANGELOG.md` are committed (step 1):
    ```sh
    git tag -a v<MAJOR>.<MINOR>.<PATCH> -m "Release v<MAJOR>.<MINOR>.<PATCH>"
@@ -147,6 +151,94 @@ Expected output: `{"contexts":["lint","unit-tests","assemble-debug"], "strict":t
 > 3. Re-run the injection corpus (step 4 above) against the new model.
 > 4. Then resume the release procedure.
 
+## R8 minify verification (pre-release gate)
+
+> [!IMPORTANT]
+> Before tagging any release, verify the R8 minify pipeline did not regress the keep rules in `proguard-rules.pro` (architecture decision D5.5 / AR6 / NFR2).
+
+The release APK is built with `isMinifyEnabled = true` + `isShrinkResources = true` + custom keep rules covering (1) `@Serializable` types in `com.verisphere.app.gemini.**` + `com.verisphere.app.storage.SessionRecord` + `com.verisphere.app.update.**`, and (2) `-assumenosideeffects` stripping `Log.d` / `Log.v` / `Log.i` at `proguard-rules.pro` L12-16. The `app/build.gradle.kts` `buildTypes.release` block further restricts the release APK to `arm64-v8a + armeabi-v7a` via `ndk { abiFilters }` (D5.6) — debug builds keep the wider ABI surface for emulator workflows.
+
+> [!IMPORTANT]
+> **R8 strips ALL `Log.*` calls by default — Log.w / Log.e / Log.wtf included.** Architecture L502-504 + D2.7 describe `Log.w` / `Log.e` as "the only severity levels available in release" — that description is INACCURATE for the current build configuration. The AGP-bundled `proguard-android-optimize.txt` (referenced via `getDefaultProguardFile(...)`) ships a SUPERSET `-assumenosideeffects` block covering `Log.v / i / w / d / e / isLoggable`, so the release DEX contains ZERO `android/util/Log` references regardless of source code. This is a STRONGER NFR7 posture than originally documented; future architecture amendment tracked in `_bmad-output/implementation-artifacts/deferred-work.md`.
+
+**Tool resolution.** All commands below reference the latest SDK build-tools directory via `$BT_LATEST`. Resolve it once at the top of your session:
+
+```sh
+# Git Bash / Linux / macOS
+export BT_LATEST="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+# PowerShell
+$BT_LATEST = "$env:ANDROID_HOME\build-tools\$((Get-ChildItem "$env:ANDROID_HOME\build-tools" | Sort-Object Name | Select-Object -Last 1).Name)"
+```
+
+**Evidence (a) — `@Serializable` types preserved.** Locate `apkanalyzer` (ships in `$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer[.bat]`; on older SDKs at `$ANDROID_HOME/tools/bin/apkanalyzer`). Then probe the release DEX for the 3 narrowed-keep-rule `@Serializable` type families:
+
+```sh
+apkanalyzer dex packages app/build/outputs/apk/release/app-release-unsigned.apk \
+  | grep -E 'com\.verisphere\.app\.(gemini\.GeminiVerdictResponse|storage\.SessionRecord|update\.VersionInfo)'
+```
+
+Expected: ≥ 9 lines — for each of `GeminiVerdictResponse`, `SessionRecord`, `VersionInfo`, the class itself + its `$Companion` object + its kotlinx.serialization `$$serializer` companion. Also spot-check the top-level `com.verisphere.app.gemini.SourceCitation` type (which is referenced by `GeminiVerdictResponse.sources` but lives as its own top-level `@Serializable` data class — verify via grep `'com\.verisphere\.app\.gemini\.SourceCitation'`). Missing references mean the narrowed keep rules in `proguard-rules.pro` L54-74 regressed — investigate before tagging.
+
+**Evidence (b) — `Log.*` calls stripped.**
+
+```sh
+apkanalyzer dex packages app/build/outputs/apk/release/app-release-unsigned.apk \
+  | grep -E 'android\.util\.Log'
+```
+
+Expected: **empty output** (R8's default optimize block strips every `Log.*` method call — see IMPORTANT callout above). Any non-empty match means the `-assumenosideeffects` directives regressed — the most common cause is removing the `proguard-android-optimize.txt` reference from `app/build.gradle.kts` `proguardFiles(...)`. **Do NOT add `--defined-only`** — `android.util.Log` lives in the Android framework JAR, never defined in the app DEX, and the `--defined-only` filter would mask all references regardless of strip status.
+
+**Evidence (c) — release APK launches end-to-end.** Install + smoke the release APK on a Pixel-class device or Android-16 AVD.
+
+> [!CAUTION]
+> **Pre-Story-7.3:** `:app:assembleRelease` produces a truly unsigned APK that `adb install` rejects with `INSTALL_PARSE_FAILED_NO_CERTIFICATES`. Until Story 7.3 wires the production keystore, manually debug-sign the release APK with the AGP-generated debug keystore (already present at `~/.android/debug.keystore` after any `assembleDebug` run). Resolve `$BT_LATEST` per the "Tool resolution" block above, then:
+>
+> ```sh
+> "$BT_LATEST/zipalign" -p -f 4 \
+>     app/build/outputs/apk/release/app-release-unsigned.apk \
+>     /tmp/app-release-aligned.apk
+> cp /tmp/app-release-aligned.apk \
+>    app/build/outputs/apk/release/app-release-debug-signed.apk
+> rm /tmp/app-release-aligned.apk
+> "$BT_LATEST/apksigner" sign \
+>     --ks ~/.android/debug.keystore --ks-pass pass:android \
+>     --ks-key-alias androiddebugkey --key-pass pass:android \
+>     app/build/outputs/apk/release/app-release-debug-signed.apk
+> adb install -r -t app/build/outputs/apk/release/app-release-debug-signed.apk
+> ```
+>
+> **Windows / Git Bash note:** `apksigner.bat` is a JVM wrapper — set `JAVA_HOME` to a JDK 11+ install (Android Studio ships one at `<Studio-install>/jbr/` on recent versions). Git Bash's `~` expands to a POSIX path that apksigner's JDK File constructor handles correctly on AGP 9.x; if you encounter `Cannot find keystore`, substitute `"$USERPROFILE/.android/debug.keystore"` (Windows-native form).
+>
+> Once Story 7.3 lands, the workflow signs with the production keystore and the unsigned variant is no longer the install target.
+
+Complete onboarding. Long-press the bubble over a screen containing a verifiable claim. Verify: (1) the bubble flips to Verdict state within ~10 s, (2) tapping the bubble opens `AnchoredDetailPanel` with the verdict + OCR + sources, (3) the History list reflects the new `SessionRecord` on next `MainActivity` open. This proves Compose runtime, OkHttp, kotlinx.serialization, and AndroidX Security all survived R8 + resource shrinking.
+
+> [!NOTE]
+> Verdict proof is captured via the UI dump (Compose `content-desc="Verdict: <label>. <ocr>..."` on the row + the AnchoredDetailPanel render) — **NOT via logcat**, because the IMPORTANT callout above explains that all `Log.*` calls are stripped from the release DEX. A `logcat -s VS.GeminiClient:*` probe will produce no output regardless of verdict outcome.
+
+> [!NOTE]
+> See [SECURITY.md → API-key rotation runbook](./SECURITY.md#api-key-rotation-runbook) for the framing of the `BuildConfig.GEMINI_API_KEY` constant — it is **intentionally** visible in the release APK's strings table (NFR9 known-extractable; mitigated by per-device rate limiting + rotation procedure, not obfuscation) and is NOT an R8 regression.
+
+### Fallback when `apkanalyzer` is unavailable or broken
+
+`apkanalyzer.bat` on Windows SDK installs that ship `cmdline-tools/` only (no legacy `tools/bin/`) throws `IllegalStateException: The tools directory property is not set`. Workaround via `dexdump` (lives in `$BT_LATEST/dexdump[.exe]` per the "Tool resolution" block above):
+
+```sh
+# Extract classes.dex from the APK (an APK is a ZIP)
+unzip -o -q app/build/outputs/apk/release/app-release-unsigned.apk classes.dex -d /tmp/apk-extract/
+
+# Evidence (a) via dexdump — single-quoted pattern so backslashes survive into grep
+# (slash-format JVM-internal names, NOT dot-format apkanalyzer names)
+"$BT_LATEST/dexdump" /tmp/apk-extract/classes.dex \
+  | grep -E 'Class descriptor  : .L(com/verisphere/app/(gemini/(GeminiVerdictResponse|SourceCitation)|storage/SessionRecord|update/VersionInfo))(\$\$serializer|\$Companion)?;.$'
+
+# Evidence (b) via dexdump
+"$BT_LATEST/dexdump" /tmp/apk-extract/classes.dex \
+  | grep -iE 'android/util/Log'
+```
+
+The R8 `app/build/outputs/mapping/release/usage.txt` strip log is a third fallback (lists every class / method / field R8 stripped). Evidence (c) (the smoke) remains the canonical functional proof regardless of which probe tool is available.
+
 ## Pre-tag checklist
 
 Before pushing the tag, verify all of the following on a clean checkout:
@@ -154,9 +246,12 @@ Before pushing the tag, verify all of the following on a clean checkout:
 - [ ] `version.properties` bumped per the Pre-V1 Release Policy.
 - [ ] `CHANGELOG.md` updated — move entries from `[Unreleased]` to a new `[X.Y.Z] - YYYY-MM-DD` section.
 - [ ] Gemini model GA-status checked at https://ai.google.dev/gemini-api/docs/models.
-- [ ] `./scripts/run_injection_corpus.sh` exited 0.
+- [ ] `./scripts/run_injection_corpus.sh` exited 0 (V1.0.0-RC tag) OR every FAIL is logged in `_bmad-output/implementation-artifacts/deferred-work.md` with a Story-7.x or `system_prompt_v2.txt` follow-up (pre-V1 patch tags 0.x.y per Story 7.1 CDN #11).
 - [ ] `./gradlew :app:assembleRelease` succeeded *(with the production keystore once Story 7.3 lands; produces `app-release-unsigned.apk` during pre-V1 development)*.
-- [ ] APK size ≤ 10 MB.
+- [ ] APK size ≤ 10 MB (`10,485,760` bytes binary-MB). Fail-loud variants (PowerShell uses `Write-Error + exit 1` for non-zero exit parity with awk `exit 1`; both branches yield `$LASTEXITCODE == 1` on failure):
+  - PowerShell: `$apk = 'app/build/outputs/apk/release/app-release-unsigned.apk'; if (-not (Test-Path $apk)) { Write-Error "APK missing: $apk"; exit 1 }; if ((Get-Item $apk).Length -le 10485760) { 'OK' } else { Write-Error 'APK exceeds 10 MB binary'; exit 1 }`
+  - Git Bash / Linux: `stat --printf '%s\n' app/build/outputs/apk/release/app-release-unsigned.apk | awk '{ if ($1 <= 10485760) print "OK"; else { print "APK exceeds 10 MB binary" > "/dev/stderr"; exit 1 } }'`
+  - macOS (BSD stat): `stat -f '%z' app/build/outputs/apk/release/app-release-unsigned.apk | awk '{ if ($1 <= 10485760) print "OK"; else { print "APK exceeds 10 MB binary" > "/dev/stderr"; exit 1 } }'`
 - [ ] Drive folder share link copied.
 
 ## Post-tag checklist

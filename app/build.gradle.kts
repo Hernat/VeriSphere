@@ -130,6 +130,34 @@ android {
             // Release builds NEVER bypass rate limiting — the flag is
             // debug-only by architecture decision (D3.7).
             buildConfigField("boolean", "SKIP_RATE_LIMIT", "false")
+
+            // Story 7.2 — Architecture D5.6 + epics 7.2 AC #4: universal RELEASE
+            // APK targets arm64-v8a + armeabi-v7a only; x86 / x86_64 / riscv64
+            // excluded. Scoped to `release` (NOT `defaultConfig`) so debug
+            // installDebug on x86_64 AVDs / Chromebook ARC++ keeps working
+            // for contributor workflows — Story 7.2 review F4 fix.
+            //
+            // Empirically NOT a no-op: the pre-Story-7.2 release APK shipped
+            // 4 ABI variants of libandroidx.graphics.path.so (transitive
+            // Compose path-rendering dep); post-filter only arm64-v8a +
+            // armeabi-v7a remain → release APK shrinks ~36 KB.
+            //
+            // `+=` is additive against this same build type's prior abiFilters
+            // value (currently empty). It does NOT protect against a future
+            // productFlavor or `android.splits.abi` block declaring its own
+            // surface — those operate on different merge axes and can replace
+            // this set entirely. If V2 introduces flavors or per-ABI splits,
+            // re-audit this block.
+            //
+            // ChromeOsAbiSupport: intentional spec decision per architecture
+            // D5.6 (V1 phone-only; Chromebook ARC++ deferred to V2 per
+            // architecture L215-218). The lint warning is a true positive but
+            // contradicts the locked V1 posture — suppress at site rather
+            // than disable project-wide.
+            //noinspection ChromeOsAbiSupport
+            ndk {
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            }
         }
     }
 

@@ -83,6 +83,17 @@ class SystemPromptInjectionTest {
 
     @Test
     fun corpus_passes_against_live_gemini() = runBlocking {
+        // Story 7.1 code-review F12: guard against empty BuildConfig.GEMINI_API_KEY
+        // before issuing any live calls. If a developer un-@Ignore's this test in
+        // a CI environment without local.properties, an empty key would issue 30
+        // sequential 401s — burning Gemini abuse-detection counters with zero
+        // diagnostic value. Skip cleanly via Assume.
+        Assume.assumeTrue(
+            "BuildConfig.GEMINI_API_KEY is blank — populate local.properties " +
+                "before un-@Ignore'ing this test (manual pre-release run only).",
+            BuildConfig.GEMINI_API_KEY.isNotBlank(),
+        )
+
         val corpusText = javaClass.classLoader
             ?.getResource(CORPUS_RESOURCE_NAME)
             ?.readText(Charsets.UTF_8)
