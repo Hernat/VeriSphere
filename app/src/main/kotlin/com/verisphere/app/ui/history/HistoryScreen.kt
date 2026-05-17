@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -34,8 +35,36 @@ import com.verisphere.app.R
 import com.verisphere.app.gemini.SourceCitation
 import com.verisphere.app.gemini.VerdictLabel
 import com.verisphere.app.storage.SessionRecord
+import com.verisphere.app.ui.banner.UpdateBanner
 import com.verisphere.app.ui.theme.VSSpacing
 import com.verisphere.app.ui.theme.VeriSphereTheme
+
+/**
+ * Story 6.3 — typed payload for the banner's reactive state.
+ *
+ * Carried as a nullable parameter to [HistoryScreen] / [HistoryContent]
+ * — `null` when the banner predicate
+ * (`updateAvailableVersion != null && downloadUrl != null &&
+ * updateAvailableVersion != updateBannerDismissedForVersion`) evaluates
+ * false, non-null when the banner should render.
+ *
+ * The two fields always agree on null-ness because they originate from
+ * the same notify-seam call (Story 6.2 CDN #4 pairing invariant,
+ * extended in Story 6.3 CDN #6 to include downloadUrl).
+ */
+data class UpdateBannerPayload(
+    val version: String,
+    val downloadUrl: String,
+)
+
+/**
+ * Story 4.2 — Compose testTag for the empty-state placeholder. Hoisted
+ * to a public constant (code-review patch P4 — 2026-05-17) so
+ * androidTest can import the symbol instead of duplicating the magic
+ * string. Mirrors the `TEST_TAG_BANNER` / `TEST_TAG_DISMISS` pattern in
+ * [com.verisphere.app.ui.banner.UpdateBanner].
+ */
+internal const val TEST_TAG_HISTORY_EMPTY_PLACEHOLDER: String = "history_empty_placeholder"
 
 /**
  * Stateful host for the history surface (Story 4.1).
@@ -63,6 +92,15 @@ fun HistoryScreen(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: HistoryViewModel = viewModel(factory = HistoryViewModel.Factory),
+    // Story 6.3 — banner wiring (CDN #10). Defaults preserve backward
+    // compatibility for the existing 10 @Preview catalogue + the
+    // HistoryScreenInstrumentedTest. The MainActivity host (the only
+    // production caller) passes non-null values when the visibility
+    // predicate (`version != null && downloadUrl != null && version
+    // != dismissed`) is true.
+    updateBanner: UpdateBannerPayload? = null,
+    onUpdateBannerDismiss: () -> Unit = {},
+    onUpdateBannerDownload: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsState()
     HistoryContent(
@@ -70,6 +108,9 @@ fun HistoryScreen(
         onItemClick = onItemClick,
         onBackClick = onBackClick,
         modifier = modifier,
+        updateBanner = updateBanner,
+        onUpdateBannerDismiss = onUpdateBannerDismiss,
+        onUpdateBannerDownload = onUpdateBannerDownload,
     )
 }
 
@@ -96,20 +137,43 @@ fun HistoryContent(
     onItemClick: (String) -> Unit,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
+    updateBanner: UpdateBannerPayload? = null,
+    onUpdateBannerDismiss: () -> Unit = {},
+    onUpdateBannerDownload: () -> Unit = {},
 ) {
     Scaffold(modifier = modifier.fillMaxSize()) { innerPadding ->
-        Box(
+        // Story 6.3 AC #2 — banner renders ABOVE the state body, visible
+        // across all three HistoryUiState arms (UX spec L609 + Flow 4:
+        // banner appears whenever the user opens history). Predicate
+        // evaluation lives in the MainActivity host per CDN #2 —
+        // Compose just renders what it's told.
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            when (state) {
-                HistoryUiState.Loading -> LoadingPlaceholder()
-                HistoryUiState.Empty -> EmptyPlaceholder()
-                is HistoryUiState.Content -> ContentList(
-                    records = state.records,
-                    onItemClick = onItemClick,
+            if (updateBanner != null) {
+                UpdateBanner(
+                    version = updateBanner.version,
+                    onDownloadClick = onUpdateBannerDownload,
+                    onDismiss = onUpdateBannerDismiss,
                 )
+            }
+            // Code-review patch P2 (2026-05-17) — `weight(1f)` so the
+            // body Box claims REMAINING vertical space after the banner
+            // measures, not the full Scaffold padding. Defends against
+            // fontScale 2x + long version strings + small screens
+            // where a banner could otherwise starve the placeholder /
+            // ContentList of vertical space (BH15 + EC16 merged).
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                when (state) {
+                    HistoryUiState.Loading -> LoadingPlaceholder()
+                    HistoryUiState.Empty -> EmptyPlaceholder()
+                    is HistoryUiState.Content -> ContentList(
+                        records = state.records,
+                        onItemClick = onItemClick,
+                    )
+                }
             }
         }
     }
@@ -135,7 +199,7 @@ private fun EmptyPlaceholder(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .fillMaxSize()
-            .testTag("history_empty_placeholder"),
+            .testTag(TEST_TAG_HISTORY_EMPTY_PLACEHOLDER),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -368,6 +432,43 @@ private fun HistoryContentContent50RecordsDarkPreview() {
                 state = HistoryUiState.Content(sampleRecords(50)),
                 onItemClick = {},
                 onBackClick = {},
+            )
+        }
+    }
+}
+
+// ─── Story 6.3 — banner-above-history @Preview catalogue ─────────────
+
+private val PREVIEW_BANNER_PAYLOAD = UpdateBannerPayload(
+    version = "0.2.0",
+    downloadUrl = "https://drive.google.com/file/d/preview",
+)
+
+@Preview(showBackground = true, name = "Empty + banner • Light")
+@Composable
+private fun HistoryContentEmptyWithBannerLightPreview() {
+    VeriSphereTheme {
+        Surface {
+            HistoryContent(
+                state = HistoryUiState.Empty,
+                onItemClick = {},
+                onBackClick = {},
+                updateBanner = PREVIEW_BANNER_PAYLOAD,
+            )
+        }
+    }
+}
+
+@Preview(showBackground = true, name = "Content 5 records + banner • Light")
+@Composable
+private fun HistoryContentContent5RecordsWithBannerLightPreview() {
+    VeriSphereTheme {
+        Surface {
+            HistoryContent(
+                state = HistoryUiState.Content(sampleRecords(5)),
+                onItemClick = {},
+                onBackClick = {},
+                updateBanner = PREVIEW_BANNER_PAYLOAD,
             )
         }
     }

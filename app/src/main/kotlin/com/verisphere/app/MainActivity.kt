@@ -22,6 +22,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.VisibleForTesting
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -40,11 +41,13 @@ import com.verisphere.app.bubble.EXTRA_SESSION_ID
 import com.verisphere.app.onboarding.OnboardingOrchestrator
 import com.verisphere.app.storage.SecureStorage
 import com.verisphere.app.storage.SessionRecord
+import com.verisphere.app.ui.banner.buildUpdateDownloadIntent
 import com.verisphere.app.ui.detail.AnchoredDetailPanel
 import com.verisphere.app.ui.detail.DetailPanelContent
 import com.verisphere.app.ui.detail.buildSourceLinkIntent
 import com.verisphere.app.ui.history.HistoryScreen
 import com.verisphere.app.ui.history.HistoryScreenIntent
+import com.verisphere.app.ui.history.UpdateBannerPayload
 import com.verisphere.app.ui.onboarding.AccessibilityExplanationScreen
 import com.verisphere.app.ui.onboarding.BatteryOptimizationBottomSheet
 import com.verisphere.app.ui.onboarding.OnboardingTutorialOverlay
@@ -282,16 +285,59 @@ class MainActivity : ComponentActivity() {
                             // renders scrim-only when `null`.
                             bubbleAnchorOffset = null,
                         )
-                        else -> HistoryScreen(
-                            // Story 4.4 — tapping a history row resolves
-                            // the record via `HistoryRepository.getById`
-                            // and mounts the same `DetailPanelHost` used
-                            // by the Verdict×Tap path (Story 2.4),
-                            // satisfying FR17 (read-only re-open) +
-                            // FR18 (offline history; in-memory cache).
-                            onItemClick = ::openHistoryRecord,
-                            onBackClick = ::finish,
-                        )
+                        else -> {
+                            // Story 6.3 — collect the 3 update-banner
+                            // flows; compose into the typed payload
+                            // (CDN #2 predicate-in-MainActivity).
+                            val container = (application as VeriSphereApplication).container
+                            val updateVersion by container.updateAvailableVersion.collectAsState()
+                            val downloadUrl by container.updateAvailableDownloadUrl.collectAsState()
+                            val dismissedForVersion by container.updateBannerDismissedForVersion
+                                .collectAsState()
+                            // CDN #6 pairing invariant guarantees
+                            // (version == null) == (downloadUrl == null),
+                            // but the StateFlow type-system doesn't
+                            // carry it; defend with explicit null
+                            // checks so smart-cast resolves cleanly.
+                            val capturedVersion = updateVersion
+                            val capturedUrl = downloadUrl
+                            val bannerPayload = if (
+                                capturedVersion != null &&
+                                capturedUrl != null &&
+                                capturedVersion != dismissedForVersion
+                            ) {
+                                UpdateBannerPayload(
+                                    version = capturedVersion,
+                                    downloadUrl = capturedUrl,
+                                )
+                            } else {
+                                null
+                            }
+                            HistoryScreen(
+                                // Story 4.4 — tapping a history row
+                                // resolves the record via
+                                // `HistoryRepository.getById` and
+                                // mounts the same `DetailPanelHost`
+                                // used by the Verdict×Tap path
+                                // (Story 2.4), satisfying FR17
+                                // (read-only re-open) + FR18 (offline
+                                // history; in-memory cache).
+                                onItemClick = ::openHistoryRecord,
+                                onBackClick = ::finish,
+                                // Story 6.3 — CDN #11 the download
+                                // URL is captured from the SAME
+                                // payload that drove the banner's
+                                // render, NOT re-read from the flow
+                                // at click time (defends torn-read
+                                // race against a concurrent
+                                // VersionChecker mutation).
+                                updateBanner = bannerPayload,
+                                onUpdateBannerDismiss = ::onUpdateBannerDismiss,
+                                onUpdateBannerDownload = {
+                                    onUpdateBannerDownload(bannerPayload?.downloadUrl)
+                                },
+                            )
+                        }
                     }
                     val record = detailRecordToShow
                     val panelGateOpen = (BuildConfig.DEBUG && bypassGatesForTest) ||
@@ -762,6 +808,72 @@ class MainActivity : ComponentActivity() {
                 orchestrator.markTutorialSeen()
             }
             tutorialSeen = true
+        }
+    }
+
+    /**
+     * Story 6.3 AC #3 — dismiss handler for the
+     * [com.verisphere.app.ui.banner.UpdateBanner]. Delegates to
+     * [com.verisphere.app.AppContainer.dismissUpdateBanner] which
+     * writes the current `updateAvailableVersion` snapshot to
+     * SecureStorage under `KEY_UPDATE_BANNER_DISMISSED_FOR_VERSION`
+     * AND flips the in-process `_updateBannerDismissedForVersion`
+     * flow synchronously so the banner disappears on the next Compose
+     * recomposition (epics L910 "the banner disappears immediately").
+     *
+     * The IO write itself is dispatched fire-and-forget on
+     * `applicationScope` with `NonCancellable + Dispatchers.IO` per
+     * CDN #7 — no try/catch needed at the call site.
+     */
+    private fun onUpdateBannerDismiss() {
+        val container = (application as VeriSphereApplication).container
+        container.dismissUpdateBanner()
+    }
+
+    /**
+     * Story 6.3 AC #4 — download handler for the
+     * [com.verisphere.app.ui.banner.UpdateBanner]. Routes the captured
+     * download URL through the Story 6.2
+     * [com.verisphere.app.ui.banner.buildUpdateDownloadIntent] factory
+     * to produce `Intent.ACTION_VIEW + FLAG_ACTIVITY_NEW_TASK` then
+     * dispatches via `context.startActivity`.
+     *
+     * **Closes deferred-work D7 (Story 6.2 review)** + **CDN #8**:
+     * `Uri.parse` accepts malformed strings (e.g. `"https:// foo"`)
+     * that produce an Intent with no resolvable handler. Wrap in
+     * `ActivityNotFoundException` + `SecurityException` catches per
+     * the Story 2.4 P4 typed-catch precedent (NOT a generic
+     * `catch (e: Exception)` which would swallow
+     * `CancellationException` and `OutOfMemoryError`). Silent log +
+     * no Toast per UX-DR1 calm-over-loud — the banner stays visible,
+     * the user can try again or dismiss.
+     *
+     * **Defensive null guard**: the caller passes
+     * `bannerPayload?.downloadUrl` which is null-safe via Kotlin's
+     * `?.`. In practice the HistoryScreen predicate hides the banner
+     * whenever payload is null, so the null path is unreachable today
+     * — but defending in depth costs one line and matches Story 4.4
+     * `openHistoryRecord` precedent.
+     */
+    private fun onUpdateBannerDownload(downloadUrl: String?) {
+        if (downloadUrl == null) {
+            // Code-review patch P7 (2026-05-17) — clarified diagnostic:
+            // the null path is actually a Compose-recomposition-lag
+            // artifact (banner rendered with payload at frame N, flow
+            // flipped to null between frame N and the click handler
+            // firing at frame N+1) rather than a StateFlow race.
+            Log.w(TAG, "onUpdateBannerDownload null URL — Compose lag between flow update and recomposition")
+            return
+        }
+        try {
+            startActivity(buildUpdateDownloadIntent(downloadUrl))
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "no activity for update download ACTION_VIEW", e)
+        } catch (e: SecurityException) {
+            // Defensive — Uri.parse with an unexpected scheme could
+            // surface SecurityException at startActivity time
+            // (mirrors DetailPanelHost P4 catch pattern).
+            Log.w(TAG, "update download blocked by SecurityException", e)
         }
     }
 

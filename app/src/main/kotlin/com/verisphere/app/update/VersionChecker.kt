@@ -77,20 +77,46 @@ class VersionChecker(
     private val currentVersionName: String = BuildConfig.VERSION_NAME,
     private val versionInfoUrl: String = VERSION_INFO_URL,
     /**
-     * Story 6.2 — invoked AFTER each `writeString` / `clearKey` of the
-     * update-available state to mirror the persisted value into the
-     * in-process [kotlinx.coroutines.flow.MutableStateFlow] held by
-     * [com.verisphere.app.AppContainer]. Default no-op so existing
-     * Story 6.1 JVM tests continue to compile unchanged.
+     * Story 6.2 / Story 6.3 — invoked AFTER each `writeString` /
+     * `clearKey` of the update-available state to mirror BOTH persisted
+     * values into the in-process [kotlinx.coroutines.flow.MutableStateFlow]s
+     * held by [com.verisphere.app.AppContainer]. Default no-op so
+     * out-of-tree consumers (only the tests, in practice) compile
+     * unchanged.
      *
      * **Contract** (CDN #4): invoked ONLY on the three state-mutating
      * branches (happy-path write / https-rejection clear / equal-or-older
      * clear). NEVER invoked on failure paths (network / non-200 /
      * malformed JSON / missing field) — those return `null` with NO
-     * state mutation, and surfacing `null` here would CLEAR a perfectly
-     * valid in-memory state on transient connectivity loss.
+     * state mutation, and surfacing `(null, null)` here would CLEAR a
+     * perfectly valid in-memory state on transient connectivity loss.
+     *
+     * **Pairing invariant** (Story 6.3): the [version] and [downloadUrl]
+     * arguments always agree — both non-null on the happy-path branch,
+     * both null on either clear branch. Consumers can rely on
+     * `(version == null) == (downloadUrl == null)` without additional
+     * defensive nullability checks.
      */
-    private val notifyUpdateAvailableChanged: (latestVersion: String?) -> Unit = {},
+    private val notifyUpdateAvailableChanged: (version: String?, downloadUrl: String?) -> Unit = { _, _ -> },
+    /**
+     * Story 6.3 — invoked on the equal-or-older branch ONLY (epics L912
+     * install-cleanup), in addition to clearing the SecureStorage key
+     * via the [clearKey] seam. Mirrors the cleared persisted value
+     * into the in-process `_updateBannerDismissedForVersion`
+     * `MutableStateFlow` held by [com.verisphere.app.AppContainer].
+     * Default no-op so JVM tests using only the Story 6.2 surface
+     * compile unchanged.
+     *
+     * **Why a separate seam (not folded into [notifyUpdateAvailableChanged])**:
+     * the non-https rejection branch clears the `update_available_*`
+     * keys but DOES NOT clear `update_banner_dismissed_for_version` —
+     * a bogus update doesn't invalidate the user's prior valid
+     * dismissal. A single 3-arg seam would require an awkward
+     * `dismissedCleared: Boolean` flag at every call site; a separate
+     * seam keeps each branch's intent explicit (CDN #4 invariant
+     * documentation pattern).
+     */
+    private val notifyDismissedVersionCleared: () -> Unit = {},
 ) {
 
     // Code-review patch P2 — `coerceInputValues` intentionally absent.
@@ -154,17 +180,29 @@ class VersionChecker(
                 Log.w(TAG, "rejected non-https downloadUrl")
                 clearKey(KEY_UPDATE_AVAILABLE_VERSION)
                 clearKey(KEY_UPDATE_AVAILABLE_DOWNLOAD_URL)
-                notifyUpdateAvailableChanged(null)
+                // Story 6.3 — non-https rejection is "bogus update", NOT
+                // install-cleanup; the user's prior valid dismissed-for-
+                // version flag stays intact. notifyDismissedVersionCleared
+                // is intentionally NOT invoked here (CDN #4).
+                notifyUpdateAvailableChanged(null, null)
                 return@withContext null
             }
             writeString(KEY_UPDATE_AVAILABLE_VERSION, parsed.latestVersion)
             writeString(KEY_UPDATE_AVAILABLE_DOWNLOAD_URL, parsed.downloadUrl)
-            notifyUpdateAvailableChanged(parsed.latestVersion)
+            notifyUpdateAvailableChanged(parsed.latestVersion, parsed.downloadUrl)
             Log.i(TAG, "update available: ${parsed.latestVersion}")
         } else {
             clearKey(KEY_UPDATE_AVAILABLE_VERSION)
             clearKey(KEY_UPDATE_AVAILABLE_DOWNLOAD_URL)
-            notifyUpdateAvailableChanged(null)
+            // Story 6.3 — install-cleanup path (epics L912): the user is
+            // now on a version equal to or newer than the latest published,
+            // so any prior dismissed-for-version flag is no longer
+            // meaningful. Clear it AND notify AppContainer to drop the
+            // in-memory mirror (CDN #4 — equal-or-older branch is the
+            // ONLY branch that fires notifyDismissedVersionCleared).
+            clearKey(KEY_UPDATE_BANNER_DISMISSED_FOR_VERSION)
+            notifyUpdateAvailableChanged(null, null)
+            notifyDismissedVersionCleared()
             Log.d(
                 TAG,
                 "no newer version (latest=${parsed.latestVersion}, current=$currentVersionName)",
@@ -274,6 +312,19 @@ class VersionChecker(
          * reads this on banner CTA tap to build `Intent.ACTION_VIEW`.
          */
         const val KEY_UPDATE_AVAILABLE_DOWNLOAD_URL: String = "update_available_download_url"
+
+        /**
+         * Story 6.3 AC #1 — SecureStorage key for the dismissed-for-version
+         * flag. Written by [com.verisphere.app.AppContainer.dismissUpdateBanner]
+         * when the user taps the [com.verisphere.app.ui.banner.UpdateBanner]
+         * dismiss IconButton; cleared by [checkForUpdates]'s equal-or-older
+         * branch (epics L912 install-cleanup).
+         *
+         * Consumers MUST import this constant — NEVER redefine the literal
+         * (Story 6.1 CDN #6 single-source-of-truth discipline, extended in
+         * Story 6.3 CDN #1).
+         */
+        const val KEY_UPDATE_BANNER_DISMISSED_FOR_VERSION: String = "update_banner_dismissed_for_version"
 
         private const val HTTP_OK: Int = 200
 

@@ -63,7 +63,8 @@ class VersionCheckerTest {
 
     private fun newChecker(
         currentVersion: String = "0.1.0",
-        notifyUpdateAvailableChanged: (String?) -> Unit = {},
+        notifyUpdateAvailableChanged: (String?, String?) -> Unit = { _, _ -> },
+        notifyDismissedVersionCleared: () -> Unit = {},
     ): VersionChecker {
         val client = OkHttpClient.Builder()
             .connectTimeout(SHORT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -78,6 +79,7 @@ class VersionCheckerTest {
             currentVersionName = currentVersion,
             versionInfoUrl = server.url("/version-info.json").toString(),
             notifyUpdateAvailableChanged = notifyUpdateAvailableChanged,
+            notifyDismissedVersionCleared = notifyDismissedVersionCleared,
         )
     }
 
@@ -110,7 +112,13 @@ class VersionCheckerTest {
     }
 
     @Test
-    fun `equal version clears both update_available_ keys`() = runTest {
+    fun `equal version clears all three update-banner keys including dismissed`() = runTest {
+        // Story 6.3 Task 2.3 — equal-or-older branch is the install-cleanup
+        // path (epics L912). All three keys (update_available_version +
+        // update_available_download_url + update_banner_dismissed_for_version)
+        // are cleared in the SPEC-MANDATED ORDER so a future contributor
+        // re-arranging cleanup logic is caught by this strict ordering
+        // assertion.
         server.enqueue(
             MockResponse().setResponseCode(HTTP_OK).setBody(
                 """{"latestVersion":"0.1.0","downloadUrl":"https://x","releasedAt":"2026-05-16"}""",
@@ -124,13 +132,18 @@ class VersionCheckerTest {
         // Code-review patch P4 — strict pairing on the clear path too.
         assertEquals(emptyList<Pair<String, String>>(), writeCalls)
         assertEquals(
-            listOf("update_available_version", "update_available_download_url"),
+            listOf(
+                "update_available_version",
+                "update_available_download_url",
+                "update_banner_dismissed_for_version",
+            ),
             clearCalls,
         )
     }
 
     @Test
-    fun `older published version clears both update_available_ keys`() = runTest {
+    fun `older published version clears all three update-banner keys`() = runTest {
+        // Story 6.3 — same install-cleanup contract as equal-version.
         server.enqueue(
             MockResponse().setResponseCode(HTTP_OK).setBody(
                 """{"latestVersion":"0.0.5","downloadUrl":"https://x","releasedAt":"2026-04-01"}""",
@@ -143,7 +156,11 @@ class VersionCheckerTest {
         assertNotNull(result)
         assertEquals(emptyList<Pair<String, String>>(), writeCalls)
         assertEquals(
-            listOf("update_available_version", "update_available_download_url"),
+            listOf(
+                "update_available_version",
+                "update_available_download_url",
+                "update_banner_dismissed_for_version",
+            ),
             clearCalls,
         )
     }
@@ -362,7 +379,7 @@ class VersionCheckerTest {
         )
         val checker = newChecker(
             currentVersion = "0.1.0",
-            notifyUpdateAvailableChanged = { notifications.add(it) },
+            notifyUpdateAvailableChanged = { v, _ -> notifications.add(v) },
         )
 
         val result = checker.checkForUpdates()
@@ -382,7 +399,7 @@ class VersionCheckerTest {
         )
         val checker = newChecker(
             currentVersion = "0.1.0",
-            notifyUpdateAvailableChanged = { notifications.add(it) },
+            notifyUpdateAvailableChanged = { v, _ -> notifications.add(v) },
         )
 
         checker.checkForUpdates()
@@ -400,7 +417,7 @@ class VersionCheckerTest {
         )
         val checker = newChecker(
             currentVersion = "0.1.0",
-            notifyUpdateAvailableChanged = { notifications.add(it) },
+            notifyUpdateAvailableChanged = { v, _ -> notifications.add(v) },
         )
 
         checker.checkForUpdates()
@@ -418,7 +435,7 @@ class VersionCheckerTest {
         )
         val checker = newChecker(
             currentVersion = "0.1.0",
-            notifyUpdateAvailableChanged = { notifications.add(it) },
+            notifyUpdateAvailableChanged = { v, _ -> notifications.add(v) },
         )
 
         val result = checker.checkForUpdates()
@@ -436,7 +453,7 @@ class VersionCheckerTest {
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
         val checker = newChecker(
             currentVersion = "0.1.0",
-            notifyUpdateAvailableChanged = { notifications.add(it) },
+            notifyUpdateAvailableChanged = { v, _ -> notifications.add(v) },
         )
 
         val result = checker.checkForUpdates()
@@ -450,7 +467,7 @@ class VersionCheckerTest {
         val notifications = mutableListOf<String?>()
         server.enqueue(MockResponse().setResponseCode(HTTP_NOT_FOUND))
         val checker = newChecker(
-            notifyUpdateAvailableChanged = { notifications.add(it) },
+            notifyUpdateAvailableChanged = { v, _ -> notifications.add(v) },
         )
 
         val result = checker.checkForUpdates()
@@ -464,7 +481,7 @@ class VersionCheckerTest {
         val notifications = mutableListOf<String?>()
         server.enqueue(MockResponse().setResponseCode(HTTP_OK).setBody("{not valid"))
         val checker = newChecker(
-            notifyUpdateAvailableChanged = { notifications.add(it) },
+            notifyUpdateAvailableChanged = { v, _ -> notifications.add(v) },
         )
 
         val result = checker.checkForUpdates()
@@ -483,10 +500,166 @@ class VersionCheckerTest {
             "update_available_download_url",
             VersionChecker.KEY_UPDATE_AVAILABLE_DOWNLOAD_URL,
         )
+        // Story 6.3 — new dismissed-for-version key declared once
+        // in VersionChecker.companion per CDN #1 single-source-of-truth.
+        assertEquals(
+            "update_banner_dismissed_for_version",
+            VersionChecker.KEY_UPDATE_BANNER_DISMISSED_FOR_VERSION,
+        )
         assertEquals(
             "https://raw.githubusercontent.com/Hernat/VeriSphere/main/version-info.json",
             VersionChecker.VERSION_INFO_URL,
         )
+    }
+
+    // ─── Story 6.3 — dual-arg notify-seam + dismissed-cleared seam ───────
+
+    @Test
+    fun `notifyUpdateAvailableChanged captures both version and downloadUrl on happy path`() = runTest {
+        // Story 6.3 CDN #6 pairing invariant — the seam emits BOTH
+        // values atomically. Locks the contract so a future refactor
+        // that splits the call (e.g. notifyVersion then notifyUrl)
+        // would fail this strict pairing assertion.
+        server.enqueue(
+            MockResponse().setResponseCode(HTTP_OK).setBody(
+                """{"latestVersion":"1.0.0","downloadUrl":"https://drive.google.com/x","releasedAt":"2026-06-01"}""",
+            ),
+        )
+        val captured = mutableListOf<Pair<String?, String?>>()
+        val checker = newChecker(
+            currentVersion = "0.1.0",
+            notifyUpdateAvailableChanged = { v, u -> captured.add(v to u) },
+        )
+
+        checker.checkForUpdates()
+
+        assertEquals(
+            listOf<Pair<String?, String?>>("1.0.0" to "https://drive.google.com/x"),
+            captured,
+        )
+    }
+
+    @Test
+    fun `notifyUpdateAvailableChanged captures null pair on equal-or-older clear branch`() = runTest {
+        // Story 6.3 CDN #6 — both null on clear branches.
+        server.enqueue(
+            MockResponse().setResponseCode(HTTP_OK).setBody(
+                """{"latestVersion":"0.1.0","downloadUrl":"https://x","releasedAt":"2026-05-16"}""",
+            ),
+        )
+        val captured = mutableListOf<Pair<String?, String?>>()
+        val checker = newChecker(
+            currentVersion = "0.1.0",
+            notifyUpdateAvailableChanged = { v, u -> captured.add(v to u) },
+        )
+
+        checker.checkForUpdates()
+
+        assertEquals(listOf<Pair<String?, String?>>(null to null), captured)
+    }
+
+    @Test
+    fun `notifyDismissedVersionCleared is invoked on equal-or-older clear branch`() = runTest {
+        // Story 6.3 CDN #4 — equal-or-older is the ONLY branch that
+        // fires the dismissed-cleared seam (epics L912 install-cleanup).
+        server.enqueue(
+            MockResponse().setResponseCode(HTTP_OK).setBody(
+                """{"latestVersion":"0.1.0","downloadUrl":"https://x","releasedAt":"2026-05-16"}""",
+            ),
+        )
+        var dismissedClearedCallCount = 0
+        val checker = newChecker(
+            currentVersion = "0.1.0",
+            notifyDismissedVersionCleared = { dismissedClearedCallCount++ },
+        )
+
+        checker.checkForUpdates()
+
+        assertEquals(1, dismissedClearedCallCount)
+    }
+
+    @Test
+    fun `notifyDismissedVersionCleared is NOT invoked on non-https rejection branch`() = runTest {
+        // Story 6.3 CDN #4 — non-https rejection clears update_available_*
+        // but DOES NOT clear the dismissed flag (a bogus update doesn't
+        // invalidate prior valid dismissal).
+        server.enqueue(
+            MockResponse().setResponseCode(HTTP_OK).setBody(
+                """{"latestVersion":"1.0.0","downloadUrl":"intent://malicious","releasedAt":"2026-06-01"}""",
+            ),
+        )
+        var dismissedClearedCallCount = 0
+        val checker = newChecker(
+            currentVersion = "0.1.0",
+            notifyDismissedVersionCleared = { dismissedClearedCallCount++ },
+        )
+
+        checker.checkForUpdates()
+
+        assertEquals(0, dismissedClearedCallCount)
+    }
+
+    @Test
+    fun `notifyDismissedVersionCleared is NOT invoked on happy-path write branch`() = runTest {
+        // Story 6.3 CDN #4 — happy path writes but does NOT touch
+        // dismissed (the new version may or may not match the dismissed
+        // one; the predicate handles that orthogonally).
+        server.enqueue(
+            MockResponse().setResponseCode(HTTP_OK).setBody(
+                """{"latestVersion":"1.0.0","downloadUrl":"https://drive.google.com/x","releasedAt":"2026-06-01"}""",
+            ),
+        )
+        var dismissedClearedCallCount = 0
+        val checker = newChecker(
+            currentVersion = "0.1.0",
+            notifyDismissedVersionCleared = { dismissedClearedCallCount++ },
+        )
+
+        checker.checkForUpdates()
+
+        assertEquals(0, dismissedClearedCallCount)
+    }
+
+    @Test
+    fun `notifyDismissedVersionCleared is NOT invoked on network failure`() = runTest {
+        // Story 6.3 CDN #4 — failure paths NEVER mutate. A transient
+        // network loss must not clear a perfectly valid user dismissal.
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+        var dismissedClearedCallCount = 0
+        val checker = newChecker(
+            currentVersion = "0.1.0",
+            notifyDismissedVersionCleared = { dismissedClearedCallCount++ },
+        )
+
+        checker.checkForUpdates()
+
+        assertEquals(0, dismissedClearedCallCount)
+    }
+
+    @Test
+    fun `notifyDismissedVersionCleared is NOT invoked on HTTP 404`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(HTTP_NOT_FOUND))
+        var dismissedClearedCallCount = 0
+        val checker = newChecker(
+            notifyDismissedVersionCleared = { dismissedClearedCallCount++ },
+        )
+
+        checker.checkForUpdates()
+
+        assertEquals(0, dismissedClearedCallCount)
+    }
+
+    @Test
+    fun `notifyDismissedVersionCleared is NOT invoked on malformed JSON`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(HTTP_OK).setBody("{not valid"))
+        var dismissedClearedCallCount = 0
+        val checker = newChecker(
+            notifyDismissedVersionCleared = { dismissedClearedCallCount++ },
+        )
+
+        checker.checkForUpdates()
+
+        assertEquals(0, dismissedClearedCallCount)
     }
 
     private companion object {
