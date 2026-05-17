@@ -66,7 +66,7 @@ The canonical procedure is the project's distribution flow. Steps marked *(once 
    - `MAJOR` is reserved: do not tag `1.0.0` until the founder substitution success criterion is validated for ≥ 1 week.
 2. **Run the release build.** `./gradlew :app:assembleRelease`. Output lands at `app/build/outputs/apk/release/app-release.apk` (signed once the keystore is wired in Story 7.3) or `app-release-unsigned.apk` (during pre-V1 development).
 3. **Verify APK size ≤ 10 MB (NFR2).** macOS / Linux: `wc -c < app/build/outputs/apk/release/app-release.apk`. Windows: `(Get-Item app/build/outputs/apk/release/app-release.apk).Length`. If the APK exceeds the budget, **stop** and audit the recent dependency additions before proceeding.
-4. **Run the injection-corpus regression.** Execute `./scripts/run_injection_corpus.sh` (lands with **Story 7.1**) and verify zero regressions against the curated injection corpus. This consumes ~30 Gemini Flash calls per run × N corpus revisions — see the [SECURITY.md quota note](./SECURITY.md#anti-injection-corpus-runner--quota-note). Mandatory before tagging a release. *(Pre-Story-7.1 releases skip this step; document the skip in the CHANGELOG.)*
+4. **Run the injection-corpus regression.** Execute `./scripts/run_injection_corpus.sh` and verify zero regressions against the curated injection corpus. This consumes ~30 Gemini Flash calls per run × N corpus revisions — see the [SECURITY.md quota note](./SECURITY.md#anti-injection-corpus-runner--quota-note). Mandatory before tagging a release. *(Pre-Story-7.1 releases skip this step; document the skip in the CHANGELOG.)* On Windows, run from Git Bash with ImageMagick installed (`choco install imagemagick`) and jq (`choco install jq`).
 5. **Tag the release.** Once `version.properties` and `CHANGELOG.md` are committed (step 1):
    ```sh
    git tag -a v<MAJOR>.<MINOR>.<PATCH> -m "Release v<MAJOR>.<MINOR>.<PATCH>"
@@ -154,7 +154,7 @@ Before pushing the tag, verify all of the following on a clean checkout:
 - [ ] `version.properties` bumped per the Pre-V1 Release Policy.
 - [ ] `CHANGELOG.md` updated — move entries from `[Unreleased]` to a new `[X.Y.Z] - YYYY-MM-DD` section.
 - [ ] Gemini model GA-status checked at https://ai.google.dev/gemini-api/docs/models.
-- [ ] `./scripts/run_injection_corpus.sh` exited 0 (Story 7.1+).
+- [ ] `./scripts/run_injection_corpus.sh` exited 0.
 - [ ] `./gradlew :app:assembleRelease` succeeded *(with the production keystore once Story 7.3 lands; produces `app-release-unsigned.apk` during pre-V1 development)*.
 - [ ] APK size ≤ 10 MB.
 - [ ] Drive folder share link copied.

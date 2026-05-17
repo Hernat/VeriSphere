@@ -53,7 +53,7 @@ Cross-reference: the release procedure that wraps this rotation is documented in
 
 ## Anti-injection corpus runner — quota note
 
-The pre-release manual injection-corpus runner (`scripts/run_injection_corpus.sh`, lands with **Story 7.1**) talks **directly** to the Gemini API from a developer machine — it does **not** go through the app's `RateLimitRepository`. Each run consumes roughly:
+The pre-release manual injection-corpus runner (`scripts/run_injection_corpus.sh`) talks **directly** to the Gemini API from a developer machine — it does **not** go through the app's `RateLimitRepository`. Each run consumes roughly:
 
 ```
 ~30 calls per run × N revisions of the corpus
