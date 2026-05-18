@@ -16,8 +16,10 @@ import com.verisphere.app.R
  * do not move out of `ui/theme/` without updating both call sites.
  *
  * Material You / dynamic colour is disabled in V1 because the
- * "Powered by Google" trust narrative requires consistent branding
+ * "Built with Gemini" trust narrative requires consistent branding
  * across the user base — not a per-device wallpaper-derived palette.
+ * (Phrase pinned in Sprint Change 2026-05-18 / Story 7.4 MS7 — see
+ * CHANGELOG for the rename audit trail.)
  */
 @Composable
 fun VeriSphereTheme(

@@ -11,7 +11,9 @@ import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.graphics.Point
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Gravity
@@ -19,10 +21,15 @@ import android.view.WindowManager
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.app.NotificationCompat
@@ -228,6 +235,14 @@ class BubbleOverlayService :
     //   - removed on transition out of BubbleState.Verdict.
     private var tooltipView: ComposeView? = null
     private var tooltipParams: WindowManager.LayoutParams? = null
+
+    // Story 7.4 P3 (code-review patch) — cached main-looper Handler.
+    // Was previously instantiated per-call inside updateTooltipWindowLayout
+    // which allocated a fresh Handler on every drag delta (~60 fps); the
+    // single shared instance saves allocations. FIFO ordering on the main
+    // looper's MessageQueue is preserved regardless of Handler-instance
+    // count, so this change is allocation-hygiene only, not a correctness fix.
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
     private var tooltipObserverJob: Job? = null
 
     // Story 1.10 — published bubble position in screen pixels (top-left
@@ -951,9 +966,19 @@ class BubbleOverlayService :
         bubblePosition: Point,
         density: Float,
         onTooltipClick: () -> Unit,
+        onTooltipLayout: (sizePx: IntSize, computedXPx: Int, computedYPx: Int) -> Unit,
     ) {
         val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-        val screenWidthPx = (configuration.screenWidthDp * density).roundToInt()
+        // Story 7.4 P4 (code-review patch) — read screen dims from the
+        // SAME source as the bubble-position math (currentWindowSizePx →
+        // WindowManager.currentWindowMetrics.bounds, INCLUDES system
+        // bars). Pre-patch used LocalConfiguration.screenWidthDp /
+        // heightDp which EXCLUDES bars, causing tooltips to be
+        // artificially pulled UP from bubbles in the bottom system-bar
+        // region. LocalConfiguration is still read to trigger
+        // recomposition on rotation; remember(configuration) invalidates
+        // the cached pair in lockstep.
+        val (screenWidthPx, screenHeightPx) = remember(configuration) { currentWindowSizePx() }
         val bubbleSizePx = (BUBBLE_DIAMETER_DP * density).roundToInt()
         val haloSizePx = (BUBBLE_HALO_DIAMETER_DP * density).roundToInt()
         val haloOffsetPx = (haloSizePx - bubbleSizePx) / 2
@@ -967,44 +992,37 @@ class BubbleOverlayService :
             PointerDirection.RIGHT
         }
 
-        androidx.compose.ui.layout.Layout(
-            content = {
-                FlashTooltip(
-                    verdictLabel = verdict.record.verdictLabel,
-                    headline = verdict.record.headline,
-                    textFaded = verdict.tooltipFaded,
-                    pointerDirection = direction,
-                    onClick = onTooltipClick,
-                )
-            },
-            modifier = Modifier.fillMaxSize(),
-        ) { measurables, constraints ->
-            val tooltipPlaceable = measurables[0].measure(
-                androidx.compose.ui.unit.Constraints(
-                    maxWidth = (constraints.maxWidth * 3) / 4, // 75 % of screen, UX-DR4
-                ),
-            )
-            layout(constraints.maxWidth, constraints.maxHeight) {
-                val tooltipX = if (direction == PointerDirection.LEFT) {
-                    visibleBubbleX + bubbleSizePx + gapPx
-                } else {
-                    visibleBubbleX - tooltipPlaceable.width - gapPx
-                }
-                val tooltipY = visibleBubbleY + bubbleSizePx / 2 - tooltipPlaceable.height / 2
-                // Code-review patch P11 — clamp on BOTH axes to keep the
-                // tooltip fully on screen. Without bottom-clamping, a
-                // long-headline tooltip rendered next to a low-positioned
-                // bubble extends past the bottom edge and is clipped
-                // invisibly. Use coerceIn(min, max) instead of
-                // coerceAtLeast(0) so neither axis can exceed the screen.
-                val maxX = (constraints.maxWidth - tooltipPlaceable.width).coerceAtLeast(0)
-                val maxY = (constraints.maxHeight - tooltipPlaceable.height).coerceAtLeast(0)
-                tooltipPlaceable.place(
-                    x = tooltipX.coerceIn(0, maxX),
-                    y = tooltipY.coerceIn(0, maxY),
-                )
+        // Story 7.4 MS4 — WRAP_CONTENT-sized tooltip window. The
+        // FlashTooltip's own `widthIn(max = 75% screen)` caps width per
+        // UX-DR4. `onSizeChanged` reports the measured pixel size; the
+        // LaunchedEffect recomputes window x/y on every (direction ||
+        // bubblePosition || tooltipSize) change and forwards to the
+        // service-side `updateTooltipWindowLayout` callback. Clamping
+        // uses screen dimensions (the window is no longer the full
+        // screen, so we can't use Compose `constraints`).
+        var tooltipSize by remember { mutableStateOf(IntSize.Zero) }
+
+        LaunchedEffect(direction, bubblePosition, tooltipSize) {
+            if (tooltipSize == IntSize.Zero) return@LaunchedEffect
+            val tooltipX = if (direction == PointerDirection.LEFT) {
+                visibleBubbleX + bubbleSizePx + gapPx
+            } else {
+                visibleBubbleX - tooltipSize.width - gapPx
             }
+            val tooltipY = visibleBubbleY + bubbleSizePx / 2 - tooltipSize.height / 2
+            val maxX = (screenWidthPx - tooltipSize.width).coerceAtLeast(0)
+            val maxY = (screenHeightPx - tooltipSize.height).coerceAtLeast(0)
+            onTooltipLayout(tooltipSize, tooltipX.coerceIn(0, maxX), tooltipY.coerceIn(0, maxY))
         }
+
+        FlashTooltip(
+            verdictLabel = verdict.record.verdictLabel,
+            headline = verdict.record.headline,
+            textFaded = verdict.tooltipFaded,
+            pointerDirection = direction,
+            onClick = onTooltipClick,
+            modifier = Modifier.onSizeChanged { intSize -> tooltipSize = intSize },
+        )
     }
 
     /**
@@ -1021,9 +1039,12 @@ class BubbleOverlayService :
         bubblePosition: Point,
         density: Float,
         onTooltipClick: () -> Unit,
+        onTooltipLayout: (sizePx: IntSize, computedXPx: Int, computedYPx: Int) -> Unit,
     ) {
         val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-        val screenWidthPx = (configuration.screenWidthDp * density).roundToInt()
+        // Story 7.4 P4 (code-review patch) — see TooltipOverlayContent
+        // for full rationale; same source-mismatch fix.
+        val (screenWidthPx, screenHeightPx) = remember(configuration) { currentWindowSizePx() }
         val bubbleSizePx = (BUBBLE_DIAMETER_DP * density).roundToInt()
         val haloSizePx = (BUBBLE_HALO_DIAMETER_DP * density).roundToInt()
         val haloOffsetPx = (haloSizePx - bubbleSizePx) / 2
@@ -1045,37 +1066,30 @@ class BubbleOverlayService :
             is BubbleState.FailureState.PossibleInjection -> failure.tooltipFaded
         }
 
-        androidx.compose.ui.layout.Layout(
-            content = {
-                FailureFlashTooltip(
-                    failure = failure,
-                    textFaded = textFaded,
-                    pointerDirection = direction,
-                    onClick = onTooltipClick,
-                )
-            },
-            modifier = Modifier.fillMaxSize(),
-        ) { measurables, constraints ->
-            val tooltipPlaceable = measurables[0].measure(
-                androidx.compose.ui.unit.Constraints(
-                    maxWidth = (constraints.maxWidth * 3) / 4, // 75 % of screen, UX-DR4
-                ),
-            )
-            layout(constraints.maxWidth, constraints.maxHeight) {
-                val tooltipX = if (direction == PointerDirection.LEFT) {
-                    visibleBubbleX + bubbleSizePx + gapPx
-                } else {
-                    visibleBubbleX - tooltipPlaceable.width - gapPx
-                }
-                val tooltipY = visibleBubbleY + bubbleSizePx / 2 - tooltipPlaceable.height / 2
-                val maxX = (constraints.maxWidth - tooltipPlaceable.width).coerceAtLeast(0)
-                val maxY = (constraints.maxHeight - tooltipPlaceable.height).coerceAtLeast(0)
-                tooltipPlaceable.place(
-                    x = tooltipX.coerceIn(0, maxX),
-                    y = tooltipY.coerceIn(0, maxY),
-                )
+        // Story 7.4 MS4 — same WRAP_CONTENT-sized window pattern as
+        // TooltipOverlayContent. See its doc for rationale.
+        var tooltipSize by remember { mutableStateOf(IntSize.Zero) }
+
+        LaunchedEffect(direction, bubblePosition, tooltipSize) {
+            if (tooltipSize == IntSize.Zero) return@LaunchedEffect
+            val tooltipX = if (direction == PointerDirection.LEFT) {
+                visibleBubbleX + bubbleSizePx + gapPx
+            } else {
+                visibleBubbleX - tooltipSize.width - gapPx
             }
+            val tooltipY = visibleBubbleY + bubbleSizePx / 2 - tooltipSize.height / 2
+            val maxX = (screenWidthPx - tooltipSize.width).coerceAtLeast(0)
+            val maxY = (screenHeightPx - tooltipSize.height).coerceAtLeast(0)
+            onTooltipLayout(tooltipSize, tooltipX.coerceIn(0, maxX), tooltipY.coerceIn(0, maxY))
         }
+
+        FailureFlashTooltip(
+            failure = failure,
+            textFaded = textFaded,
+            pointerDirection = direction,
+            onClick = onTooltipClick,
+            modifier = Modifier.onSizeChanged { intSize -> tooltipSize = intSize },
+        )
     }
 
     private fun onBubbleDragDelta(dxPx: Float, dyPx: Float) {
@@ -1327,6 +1341,37 @@ class BubbleOverlayService :
         }
     }
 
+    /**
+     * Story 7.4 MS4 — post-composition window-position update for the
+     * permanent tooltip touch-routing fix. Called by [TooltipOverlayContent]
+     * + [FailureTooltipOverlayContent] via the `onTooltipLayout` callback
+     * whenever the tooltip measures (post-`onSizeChanged`) or the bubble
+     * position changes (drag, edge-snap). The [Handler.post] envelope
+     * defers to the next main-looper tick to avoid mid-layout
+     * `updateViewLayout` races; the typed catches mirror the existing
+     * degraded-mode pattern in [attachTooltipView].
+     */
+    private fun updateTooltipWindowLayout(sizePx: IntSize, computedXPx: Int, computedYPx: Int) {
+        mainHandler.post {
+            val view = tooltipView ?: return@post
+            val params = tooltipParams ?: return@post
+            if (!::windowManager.isInitialized) return@post
+            params.width = sizePx.width
+            params.height = sizePx.height
+            params.x = computedXPx
+            params.y = computedYPx
+            try {
+                windowManager.updateViewLayout(view, params)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Tooltip updateViewLayout failed — view detached.", e)
+            } catch (e: WindowManager.BadTokenException) {
+                Log.w(TAG, "Tooltip updateViewLayout failed — bad token.", e)
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                Log.w(TAG, "Tooltip updateViewLayout failed — degraded mode.", e)
+            }
+        }
+    }
+
     private fun attachTooltipView() {
         if (tooltipView != null) return
         if (!::windowManager.isInitialized) return
@@ -1349,6 +1394,7 @@ class BubbleOverlayService :
                             bubblePosition = bubblePosition,
                             density = resources.displayMetrics.density,
                             onTooltipClick = { launchDetailPanelActivity(s.record.id) },
+                            onTooltipLayout = ::updateTooltipWindowLayout,
                         )
                         is BubbleState.FailureState -> FailureTooltipOverlayContent(
                             failure = s,
@@ -1358,10 +1404,23 @@ class BubbleOverlayService :
                                 if (s is BubbleState.FailureState.PossibleInjection) {
                                     launchDetailPanelActivity(s.record.id)
                                 }
-                                // Other FailureState variants — onClick is a
-                                // no-op (no SessionRecord; tooltip is non-
-                                // touch-modal in practice per deferred-work D1).
+                                // Other FailureState variants — onClick is
+                                // gated to no-op at the Composable level
+                                // (FailureFlashTooltip's clickable Surface
+                                // is wrapped only for PossibleInjection per
+                                // Story 3.3 patch P3). Window-flag posture:
+                                // FLAG_NOT_TOUCH_MODAL forwards taps OUTSIDE
+                                // the WRAP_CONTENT window bounds to the
+                                // source app, but taps INSIDE the bounds on
+                                // a non-clickable Surface are silently
+                                // consumed (regression vs pre-MS4 full-
+                                // screen FLAG_NOT_TOUCHABLE passthrough).
+                                // Tracked as deferred-work D5 from Story
+                                // 7.4 code review — runtime fix (dynamic
+                                // flag swap by state) deferred to Story
+                                // 7.5 / V2.
                             },
+                            onTooltipLayout = ::updateTooltipWindowLayout,
                         )
                         else -> Unit
                     }
@@ -1369,41 +1428,44 @@ class BubbleOverlayService :
             }
         }
 
-        // Story 2.4 smoke 2026-05-11 — DN1 confirmed empirically:
-        // FLAG_NOT_TOUCH_MODAL on a MATCH_PARENT window does NOT
-        // pass-through touches inside the window's bounds (the entire
-        // screen). With the tooltip overlay rendered, ALL screen
-        // touches were consumed by this window, freezing the user
-        // out of every other window. Reverted to FLAG_NOT_TOUCHABLE
-        // (Story 1.10 baseline) — the tooltip is once again purely
-        // decorative. Trade-off: `Verdict × Tap (on tooltip)` (AC #3
-        // / FlashTooltip clickable) is no longer reachable; only
-        // `Verdict × Tap (on bubble)` triggers the panel via the
-        // bubble window's separate WRAP_CONTENT 104dp halo (which
-        // has the correct touch semantics).
-        //
-        // Permanent fix is a Story 1.9 / 2.4-followup design choice:
-        //   (a) Shrink this window to WRAP_CONTENT sized at the
-        //       FlashTooltip's bounding box via a post-composition
-        //       size callback → WindowManager.updateViewLayout.
-        //   (b) Drop the tooltip-tap path from the spec (only the
-        //       bubble triggers the panel).
-        //   (c) Move the FlashTooltip inside the bubble's halo
-        //       window (caps tooltip max-width at 104dp — visually
-        //       restrictive).
-        // Tracked in deferred-work.md (Story 2.4 smoke section).
+        // Story 7.4 MS4 — permanent option-(a) fix per Hernat decision
+        // (deferred-work L221-228 + L314-318). The tooltip overlay
+        // window is now WRAP_CONTENT-sized at the FlashTooltip's
+        // measured bounding box; position via `params.x/y` is updated
+        // post-composition via `Modifier.onSizeChanged` + `LaunchedEffect`
+        // → `updateTooltipWindowLayout` → `windowManager.updateViewLayout`
+        // (posted to the main looper to avoid mid-layout races). With
+        // WRAP_CONTENT, FLAG_NOT_TOUCH_MODAL (Story 1.10 baseline
+        // restored) properly forwards outside-bounds taps to the source
+        // app — taps INSIDE the tooltip Surface reach FlashTooltip's
+        // clickable Surface and trigger the detail panel. The initial
+        // `x = 0, y = 0` is overwritten ~16 ms after `addView` when the
+        // first `updateTooltipWindowLayout` call fires; the one-frame
+        // visual lag is invisible under the existing 300 ms fade-in
+        // (FlashTooltip TEXT_FADE_MS). Closes Story 2.4 AC #3 properly
+        // (taps on tooltip → detail panel) + closes deferred-work DN1
+        // L312-318.
         val tParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = 0
+            // Story 7.4 P2 (code-review patch) — start off-screen so the
+            // first frame (before updateTooltipWindowLayout fires
+            // post-onSizeChanged, ~16 ms after addView) doesn't briefly
+            // paint at (0, 0). animateFloatAsState's default initialValue
+            // == first targetValue, so text appears at full opacity
+            // instantly; the brief flash at top-left would otherwise be
+            // visible. updateTooltipWindowLayout overwrites x/y at the
+            // first onSizeChanged callback, snapping the tooltip into
+            // place. FLAG_LAYOUT_NO_LIMITS permits the negative offset.
+            x = INITIAL_OFF_SCREEN_OFFSET_PX
+            y = INITIAL_OFF_SCREEN_OFFSET_PX
         }
 
         try {
@@ -1490,5 +1552,13 @@ class BubbleOverlayService :
         // Story 1.10 — gap between the bubble's visible edge and the
         // FlashTooltip pointer. UX-DR4 8 dp spacing token.
         private const val TOOLTIP_GAP_DP = 8f
+
+        // Story 7.4 P2 (code-review patch) — initial off-screen x/y for
+        // the tooltip overlay window so the first frame (before
+        // updateTooltipWindowLayout fires) doesn't briefly paint at
+        // (0, 0). Any large negative offset works because the window
+        // has FLAG_LAYOUT_NO_LIMITS; -100,000 px is well beyond any
+        // realistic display dimension.
+        private const val INITIAL_OFF_SCREEN_OFFSET_PX = -100_000
     }
 }

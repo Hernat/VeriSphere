@@ -371,12 +371,17 @@ private fun failureFlashTextColorFor(failure: BubbleState.FailureState): Color =
  *    omit the action label so the assistive tech does NOT announce
  *    "Double tap to expand detail" on a non-actionable failure.
  *
- * **Tooltip touch-modal caveat** — Story 2.4 smoke (deferred-work D1)
- * locked the tooltip overlay window at `FLAG_NOT_TOUCHABLE`, so the
- * [onClick] lambda is in practice only reached via the bubble-tap path
- * (`BubbleOverlayService.onBubbleTap` → `handleTappableBubbleTap` →
- * `launchDetailPanelActivity`). The lambda is wired regardless so a
- * future permanent tooltip-touch fix is a one-line change.
+ * **Tooltip touch routing** — Story 7.4 MS4 landed the permanent
+ * option-(a) fix per Hernat decision (deferred-work L221-228). The
+ * tooltip overlay window is now `WRAP_CONTENT`-sized via
+ * `Modifier.onSizeChanged` + `Handler(Looper.getMainLooper()).post {
+ * windowManager.updateViewLayout(...) }`; the window flag is
+ * `FLAG_NOT_TOUCH_MODAL` (Story 1.10 baseline restored). Taps on the
+ * `FailureFlashTooltip` clickable Surface now reach this [onClick] lambda
+ * directly (no detour through the bubble-tap path). Only the
+ * `PossibleInjection` variant is tap-actionable per AC #4 — the
+ * `clickable` + `Role.Button` semantics are gated on it (Story 3.3
+ * code-review patch P3).
  *
  * @param failure The [BubbleState.FailureState] variant — drives colour
  *                and copy resolution.

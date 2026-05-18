@@ -104,23 +104,20 @@ internal object GeminiRequest {
                 // rate drops vs schema-enforced mode but the smoke
                 // path is unblocked.
                 //
-                // **Permanent fix** (out of scope, deferred-work):
-                // pick one of:
-                //  (a) two-call approach (image → claim text without
-                //      tools/schema; then claim → verdict with tools
-                //      but no schema → free-text JSON parsed
-                //      defensively);
-                //  (b) function calling instead of grounding (declare
-                //      a `search` function the model calls, we run
-                //      it, re-feed results); the API surface allows
-                //      structured output with function tools but not
-                //      grounding tools;
-                //  (c) drop FR9 (TRUE requires ≥ 2 sources) and rely
-                //      on Gemini's training cutoff for fact-checking.
+                // **Permanent fix landed in Sprint Change 2026-05-18
+                // (Story 7.4 MS2)** — formalise option (d): drop
+                // responseMimeType + responseJsonSchema, rely on
+                // system prompt v1 JSON discipline + defensive
+                // markdown-fence-stripping parse in
+                // GeminiClient.parseVerdict. Options (a) two-call /
+                // (b) function calling / (c) drop FR9 deferred to V2
+                // (see architecture D3.3 + D3.4 amended Reason
+                // columns).
                 //
                 // `responseSchema` (unused param now) is kept in the
-                // function signature so reverting is a one-line
-                // change once the design conflict is resolved.
+                // function signature so reverting to option (a) Call 1
+                // (no tools, structured output OK) is a one-line
+                // change when V2 lands the two-call rework.
 
                 // Story 2.4 — `thinkingConfig.thinkingBudget = 0`
                 // disables the "thinking" step on Gemini 2.5+ / 3.x

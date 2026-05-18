@@ -12,7 +12,7 @@
     <color name="vs_on_background">#1F1F1F</color>
     <color name="vs_on_background_muted">#5F6368</color>
 
-    <!-- Brand accent — Google Blue (FR14, "Powered by Google" trust transfer) -->
+    <!-- Brand accent — Google Blue (FR14, "Built with Gemini" trust transfer; phrase pinned in Sprint Change 2026-05-18 / Story 7.4 MS7 — see CHANGELOG) -->
     <color name="vs_brand_google_blue">#4285F4</color>
     <color name="vs_on_brand_google_blue">#FFFFFF</color>
 

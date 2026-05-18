@@ -36,7 +36,7 @@
     <string name="detail_sources_title">Sources</string>
     <string name="detail_sources_unavailable">No corroborating sources found.</string>
     <string name="detail_padlock_copy">No one sees this. Just between us.</string>
-    <string name="detail_powered_by_google">Powered by Google</string>
+    <string name="detail_built_with_gemini">Built with Gemini</string>
     <!-- Reserved for future a11y wiring (V2 i18n pass owns the prefix-binding). -->
     <string name="detail_regional_bias_a11y_prefix" tools:ignore="UnusedResources">Regional context:</string>
 

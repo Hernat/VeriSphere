@@ -90,10 +90,10 @@ class DetailPanelContentUiTest {
         composeTestRule.onNodeWithTag(TAG_BIAS_ROW).assertIsDisplayed()
         composeTestRule.onNodeWithText(SAMPLE_BIAS_NOTE).assertIsDisplayed()
 
-        // Section 5 — footer with padlock copy + Powered by Google.
+        // Section 5 — footer with padlock copy + Built with Gemini.
         composeTestRule.onNodeWithTag(TAG_FOOTER_ROW).assertIsDisplayed()
         composeTestRule.onNodeWithText(PADLOCK_COPY).assertIsDisplayed()
-        composeTestRule.onNodeWithText(POWERED_BY_GOOGLE).assertIsDisplayed()
+        composeTestRule.onNodeWithText(BUILT_WITH_GEMINI).assertIsDisplayed()
     }
 
     @Test
@@ -185,14 +185,14 @@ class DetailPanelContentUiTest {
         }
 
         // P8 — assert every visible text node from AC #11.b.1 (verdict word,
-        // section titles, headline, OCR, padlock copy, Powered by Google)
+        // section titles, headline, OCR, padlock copy, Built with Gemini)
         // is still discoverable at fontScale 1.5f. NFR14 lock-in.
         composeTestRule.onNodeWithText(VERDICT_WORD_TRUE).assertIsDisplayed()
         composeTestRule.onNodeWithText(OCR_TITLE).assertIsDisplayed()
         composeTestRule.onNodeWithText(SOURCES_TITLE).assertIsDisplayed()
         composeTestRule.onNodeWithText(longHeadline).assertIsDisplayed()
         composeTestRule.onNodeWithText(longOcr).assertIsDisplayed()
-        composeTestRule.onNodeWithText(POWERED_BY_GOOGLE).assertIsDisplayed()
+        composeTestRule.onNodeWithText(BUILT_WITH_GEMINI).assertIsDisplayed()
         composeTestRule.onNodeWithText(PADLOCK_COPY).assertIsDisplayed()
 
         // Truncation marker — Compose ellipsises with the literal "…" (U+2026).
@@ -296,7 +296,7 @@ private const val OCR_TITLE = "What was read"
 private const val SOURCES_TITLE = "Sources"
 private const val SOURCES_UNAVAILABLE_MSG = "No corroborating sources found."
 private const val PADLOCK_COPY = "No one sees this. Just between us."
-private const val POWERED_BY_GOOGLE = "Powered by Google"
+private const val BUILT_WITH_GEMINI = "Built with Gemini"
 
 // Story 2.1 chip label format: `domain · YYYY-MM`. SAMPLE_BBC's URL is
 // `https://www.bbc.com/...`, extractDisplayDomain returns `bbc.com`.

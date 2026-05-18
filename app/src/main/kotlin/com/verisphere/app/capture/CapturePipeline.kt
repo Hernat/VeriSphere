@@ -209,10 +209,14 @@ class CapturePipeline(
     companion object {
         /**
          * The full pipeline budget: covers frame capture + the Gemini
-         * call. PRD NFR1 targets P95 < 2 s end-to-end; the 20 s ceiling
-         * is the backstop matching the OkHttp `callTimeout` (D3.8).
+         * call. PRD NFR1 targets P95 ≤ ~30 s end-to-end with Search
+         * Grounding + Vision active (amended in Sprint Change 2026-05-18
+         * / Story 7.4 MS1; original `< 2 s` deferred to V2 contingent
+         * on Gemini Flash latency improvements OR `streamGenerateContent`
+         * migration); the 60 s ceiling is the backstop matching the
+         * OkHttp `callTimeout` (D3.8 amended).
          */
-        val CAPTURE_TIMEOUT = 60.seconds // TEMP Story 2.4 smoke (was 20s; revert when D3.8 callTimeout amended for Grounding+Vision latency)
+        val CAPTURE_TIMEOUT = 60.seconds // Per architecture D3.8 (Sprint Change 2026-05-18 / Story 7.4 MS1 formalised the 5/45/60 + thinkingBudget=0 posture; previous 20s ceiling re-eligible in V2 contingent on Gemini Flash latency improvements OR streamGenerateContent migration)
 
         private val TAG = tag("CapturePipeline")
     }

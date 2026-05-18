@@ -47,7 +47,7 @@ import com.verisphere.app.ui.theme.VeriSphereTheme
  * Renders, top-to-bottom: (1) verdict row (emoji + word) and headline,
  * (2) "What was read" OCR card, (3) "Sources" row of [SourceLinkChip]
  * (or an unavailable message when the verdict carries no sources),
- * (4) the conditional regional-bias row, and (5) the privacy + Powered-by-Google
+ * (4) the conditional regional-bias row, and (5) the privacy + Built-with-Gemini
  * footer.
  *
  * **Sizing contract** — declared as a `ColumnScope.()` extension so the 5
@@ -266,7 +266,7 @@ private fun FooterRow() {
     val labelStyle = MaterialTheme.typography.labelMedium
     val mutedColor = MaterialTheme.colorScheme.onSurfaceVariant
     val padlockCopy = stringResource(R.string.detail_padlock_copy)
-    val poweredBy = stringResource(R.string.detail_powered_by_google)
+    val poweredBy = stringResource(R.string.detail_built_with_gemini)
 
     // P4 — merged-semantics announcement so TalkBack reads the privacy +
     // attribution as a single utterance instead of pronouncing each emoji
@@ -286,7 +286,7 @@ private fun FooterRow() {
         // the two visual halves never wrap separately at fontScale = 1.5f
         // narrow widths. `FlowRow` may still wrap the two pairs to two lines,
         // but the padlock stays glued to its copy and the em-dash stays glued
-        // to "Powered by Google".
+        // to "Built with Gemini".
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),

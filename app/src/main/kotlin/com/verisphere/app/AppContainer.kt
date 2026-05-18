@@ -390,14 +390,13 @@ class AppContainer(private val applicationContext: Context) {
     // (Stories 1.6, 1.8) — owned by the service, not by AppContainer.
 
     private companion object {
-        // TEMP Story 2.4 smoke 2026-05-11: bumped 5/15/20 → 5/45/60.
-        // Verdict + Search Grounding + Vision on Gemini 2.5 Flash
-        // sometimes exceeds 20s wall-clock (verified on Pixel_9_Pro
-        // AVD: 11s success for one image, 20s+ timeout for a 390KB
-        // image). Architecture D3.8 was written before Grounding +
-        // Vision were combined; revisit when spec author confirms
-        // production timeout target. Revert before merge unless
-        // D3.8 is amended.
+        // Per architecture D3.8 (Sprint Change 2026-05-18 / Story 7.4 MS1
+        // formalised the 5/45/60 + thinkingBudget=0 posture). Verdict +
+        // Search Grounding + Vision on gemini-2.5-flash routinely
+        // exceeds the original 20 s ceiling (Story 2.4 smoke evidence,
+        // deferred-work L306-310). The 5/15/20 posture is reserved as a
+        // V2 stretch contingent on Gemini Flash latency improvements OR
+        // migration to streamGenerateContent (deferred-work L309).
         private const val CONNECT_TIMEOUT_SECONDS = 5L
         private const val READ_TIMEOUT_SECONDS = 45L
         private const val CALL_TIMEOUT_SECONDS = 60L
