@@ -1,3 +1,4 @@
+import java.io.File
 import java.io.FileInputStream
 import java.util.Properties
 
@@ -76,6 +77,74 @@ val geminiApiKeyForBuildConfig: String = resolvedGeminiApiKey
     .replace("\\", "\\\\")
     .replace("\"", "\\\"")
 
+// ─── RELEASE_KEYSTORE_* resolution (D2.10, D5.4, Story 7.3) ──────────────
+// CI populates four env vars from GitHub Secrets; `release.yml` decodes the
+// base64 keystore secret into `$RUNNER_TEMP/release.keystore` and exports
+// the path through `RELEASE_KEYSTORE_PATH`. Locally, contributors can set
+// the same four env vars pointing at their own dev keystore.
+//
+// Resolution rules:
+//   - All 4 set + file exists → return KeystoreInfo (signs the release APK).
+//   - All 4 unset           → return null (unsigned fallback; preserves the
+//                              pre-Story-7.3 local-dev experience + the
+//                              pre-keystore CI graceful no-op at
+//                              release.yml L52-54).
+//   - 1..3 set              → throw GradleException (operator error:
+//                              secret typo / partial paste; better to fail
+//                              loud than ship a silently-unsigned APK).
+//   - All 4 set + file missing → throw GradleException (likely base64
+//                              decode failure in release.yml; same trap).
+data class KeystoreInfo(
+    val storeFile: File,
+    val storePassword: String,
+    val keyAlias: String,
+    val keyPassword: String,
+)
+val resolvedReleaseKeystore: KeystoreInfo? = run {
+    val envPath = System.getenv("RELEASE_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }
+    val envStorePw = System.getenv("RELEASE_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
+    val envAlias = System.getenv("RELEASE_KEY_ALIAS")?.takeIf { it.isNotBlank() }
+    val envKeyPw = System.getenv("RELEASE_KEY_PASSWORD")?.takeIf { it.isNotBlank() }
+
+    val pairs = listOf(
+        "RELEASE_KEYSTORE_PATH" to envPath,
+        "RELEASE_KEYSTORE_PASSWORD" to envStorePw,
+        "RELEASE_KEY_ALIAS" to envAlias,
+        "RELEASE_KEY_PASSWORD" to envKeyPw,
+    )
+    val setCount = pairs.count { it.second != null }
+    when (setCount) {
+        0 -> null
+        4 -> {
+            val storeFile = File(envPath!!)
+            require(storeFile.exists() && storeFile.isFile) {
+                "RELEASE_KEYSTORE_PATH points at '$envPath' which does not exist " +
+                    "or is not a regular file. If you are on CI, check the " +
+                    "release.yml `Decode keystore` step — a malformed " +
+                    "RELEASE_KEYSTORE_BASE64 secret may have produced an " +
+                    "empty file. Locally, set RELEASE_KEYSTORE_PATH to a " +
+                    "valid keystore file OR unset all four RELEASE_KEYSTORE_* " +
+                    "env vars to fall back to an unsigned APK."
+            }
+            KeystoreInfo(
+                storeFile = storeFile,
+                storePassword = envStorePw!!,
+                keyAlias = envAlias!!,
+                keyPassword = envKeyPw!!,
+            )
+        }
+        else -> {
+            val missing = pairs.filter { it.second == null }.joinToString(", ") { it.first }
+            throw GradleException(
+                "Partial RELEASE_KEYSTORE_* env vars detected: $missing not set. " +
+                    "Either set all 4 (signed release build) OR none of them " +
+                    "(unsigned-fallback build). See RELEASING.md → GitHub " +
+                    "Secrets for the canonical 4-secret list."
+            )
+        }
+    }
+}
+
 // ─── SKIP_RATE_LIMIT debug-only flag ─────────────────────────────────────
 // Honoured only in debug builds. Set via -PskipRateLimit=true on the
 // Gradle command line for testing (`./gradlew :app:assembleDebug
@@ -86,6 +155,27 @@ android {
     namespace = "com.verisphere.app"
     compileSdk {
         version = release(36)
+    }
+
+    // ─── Release signing (D2.10, D5.4, Story 7.3) ───────────────────────
+    // The signingConfig is wired into buildTypes.release ONLY when all
+    // four RELEASE_KEYSTORE_* env vars resolve at configuration time
+    // (resolvedReleaseKeystore != null). Otherwise the block is skipped
+    // entirely + assembleRelease produces app-release-unsigned.apk.
+    signingConfigs {
+        resolvedReleaseKeystore?.let { keystore ->
+            create("release") {
+                storeFile = keystore.storeFile
+                storePassword = keystore.storePassword
+                keyAlias = keystore.keyAlias
+                keyPassword = keystore.keyPassword
+                // v1+v2+v3 schemes all enabled (AGP defaults; restated for
+                // documentation — Story 7.3 e2e smoke asserts all three).
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
     }
 
     defaultConfig {
@@ -121,6 +211,15 @@ android {
             buildConfigField("boolean", "SKIP_RATE_LIMIT", skipRateLimitDebug)
         }
         release {
+            // Story 7.3 — apply the release signingConfig when present.
+            // resolvedReleaseKeystore == null → no signingConfig assigned →
+            // assembleRelease produces app-release-unsigned.apk (graceful
+            // fallback for local-dev workflows without a keystore + the
+            // pre-keystore-provisioned CI path).
+            resolvedReleaseKeystore?.let {
+                signingConfig = signingConfigs.getByName("release")
+            }
+
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

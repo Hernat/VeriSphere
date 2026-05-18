@@ -1,16 +1,24 @@
-# Release workflow — Story 1.3 skeleton (AR10 / D5.7).
-# Triggers on tags matching `v[0-9]+.[0-9]+.[0-9]+`. Builds the release
-# APK and attaches it to the GitHub Release auto-created for the tag.
+# Release workflow — Story 1.3 skeleton, finalised by Story 7.3 (AR10 / D5.7 / D2.10).
+# Triggers on tags matching `v*.*.*` (fnmatch glob — see comment block below
+# at L17-20). Builds the release APK, signs it with the production keystore,
+# verifies the SIGNED APK is ≤ 10 MB binary (NFR2), and attaches it to the
+# GitHub Release auto-created for the tag with a CHANGELOG-excerpt body.
 #
-# Story 7.3 finalises this workflow with:
-#   - signingConfigs { release { ... } } wired into app/build.gradle.kts
-#   - APK size verification step (NFR2)
-#   - Corpus runner step (Story 7.1)
-#   - CHANGELOG excerpt extraction in the Release body
-#
-# Until Story 7.3 lands, the keystore secrets may be absent. The decode
-# step is a graceful no-op in that case and produces an UNSIGNED APK
-# (`app-release-unsigned.apk`) which still gets attached to the Release.
+# Story 7.3 additions over the Story 1.3 skeleton:
+#   - `signingConfigs.release` wired in app/build.gradle.kts (consumes
+#     RELEASE_KEYSTORE_* env vars at Gradle configuration time; falls back
+#     to unsigned APK when secrets are absent so the workflow never blocks).
+#   - `concurrency:` block prevents tag-rerun races (deferred-work L448).
+#   - `gradle/actions/wrapper-validation-action@v3` first step guards
+#     against gradle-wrapper.properties swap attacks (deferred-work C8).
+#   - APK size verification step (`stat | awk` ≤ 10,485,760 bytes) runs on
+#     the SIGNED APK per Story 7.2 deferred D3 — the user-facing artefact.
+#   - CHANGELOG excerpt extracted from the tag's `## [<version>]` section
+#     and passed as the GitHub Release body (with auto-generated notes as
+#     graceful fallback when the section is absent — e.g. rc tags).
+#   - OPT-IN corpus runner step gated by the `RUN_CORPUS_IN_RELEASE` repo
+#     variable + the `GEMINI_API_KEY` secret. OFF by default (corpus stays
+#     manual per Story 7.1 CDN #11 — burns ~30 Gemini calls per run).
 
 name: Release
 
@@ -22,6 +30,14 @@ on:
   push:
     tags:
       - 'v*.*.*'
+
+# Serialise tag-rerun races without aborting in-flight uploads. A force-pushed
+# re-tag must NOT cancel the prior run's GitHub Release upload mid-flight;
+# `softprops/action-gh-release@v2` is idempotent on file overwrite so the
+# worst case is a no-op double-upload.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -36,20 +52,60 @@ jobs:
           # has its own token input; subsequent steps (incl. Gradle plugins)
           # have no need for repo write credentials.
           persist-credentials: false
+
+      # Story 7.3 — wrapper-validation guards against the gradle-wrapper.jar
+      # swap attack vector (a hostile branch rewriting `distributionUrl` to
+      # point at a malicious Gradle distribution). Runs first so a tampered
+      # wrapper aborts the workflow before any other step executes.
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation-action@v3
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Decode keystore (no-op until Story 7.3 provisions secrets)
+      # Story 7.3 — OPT-IN corpus runner toolchain install. Skipped by default
+      # to keep tag-time runs cheap (no apt fetch). Enabled when the founder
+      # opts in via `vars.RUN_CORPUS_IN_RELEASE = 'true'` + the GEMINI_API_KEY
+      # secret is present. F9 code-review patch: `jq` ships pre-installed on
+      # the ubuntu-latest runner per actions/runner-images — only ImageMagick
+      # (`magick` / `convert`, needed by scripts/run_injection_corpus.sh) has
+      # to be apt-installed at run time.
+      - name: Install corpus runner toolchain (opt-in)
+        if: vars.RUN_CORPUS_IN_RELEASE == 'true' && secrets.GEMINI_API_KEY != ''
+        run: sudo apt-get update && sudo apt-get install -y imagemagick
+
+      # Story 7.3 — OPT-IN anti-injection corpus regression run before the
+      # release APK is even built. A regression fails the workflow before
+      # the keystore is touched. `EXIT_THRESHOLD=100` enforces V1.0.0-RC
+      # tag-time hardening per scripts/run_injection_corpus.sh L17-23.
+      - name: Run anti-injection corpus (opt-in)
+        if: vars.RUN_CORPUS_IN_RELEASE == 'true' && secrets.GEMINI_API_KEY != ''
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          EXIT_THRESHOLD: '100'
+        run: |
+          set -euo pipefail
+          chmod +x scripts/run_injection_corpus.sh
+          ./scripts/run_injection_corpus.sh
+
+      - name: Decode keystore (graceful no-op when secret is absent)
+        id: decode
         shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
           set -euo pipefail
           if [ -z "${KEYSTORE_BASE64:-}" ]; then
-            echo "::warning::RELEASE_KEYSTORE_BASE64 not set — Story 7.3 ships keystore. Producing unsigned APK."
+            echo "::warning::RELEASE_KEYSTORE_BASE64 not set — producing UNSIGNED APK. Generate the keystore + upload the secret per RELEASING.md → Keystore generation."
+            # F6 code-review patch: emit an empty keystore_path output so
+            # the Build step's RELEASE_KEYSTORE_PATH env var resolves to ""
+            # → resolvedReleaseKeystore in app/build.gradle.kts sees 0 env
+            # vars set (not 1) → unsigned-fallback branch (no false
+            # partial-env-var GradleException).
+            echo "keystore_path=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # printf '%s' avoids `echo`'s trailing-newline + backslash-interpretation
@@ -60,15 +116,20 @@ jobs:
             echo "::error::Decoded keystore is empty — RELEASE_KEYSTORE_BASE64 is malformed."
             exit 1
           fi
+          echo "keystore_path=$RUNNER_TEMP/release.keystore" >> "$GITHUB_OUTPUT"
           echo "Keystore decoded to $RUNNER_TEMP/release.keystore"
 
       - name: Build release APK
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          # The four below are consumed by signingConfigs { release { ... } }
-          # which Story 7.3 wires into app/build.gradle.kts. Until then they
-          # are unused but pass through harmlessly.
-          RELEASE_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
+          # The four below are consumed by signingConfigs.release in
+          # app/build.gradle.kts (Story 7.3). F6 code-review patch:
+          # RELEASE_KEYSTORE_PATH is now sourced from the decode step's
+          # `keystore_path` output (empty string when the secret is absent),
+          # so resolvedReleaseKeystore counts 0 RELEASE_KEYSTORE_* env vars
+          # set when no keystore is configured — not 1 — and falls back to
+          # unsigned cleanly without tripping the partial-env-var trap.
+          RELEASE_KEYSTORE_PATH: ${{ steps.decode.outputs.keystore_path }}
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
@@ -88,9 +149,74 @@ jobs:
           echo "path=${apks[0]}" >> "$GITHUB_OUTPUT"
           echo "Found APK: ${apks[0]}"
 
+      # Story 7.3 — APK size verification against the SIGNED APK (per Story 7.2
+      # deferred D3: the user-facing distribution artefact has the v2/v3
+      # signature block added, ~12-13 KB heavier than the unsigned baseline).
+      # Threshold: 10,485,760 bytes = 10 binary MB (Story 7.2 CDN #4).
+      - name: Verify APK size ≤ 10 MB (NFR2)
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK_PATH="${{ steps.apk.outputs.path }}"
+          APK_SIZE=$(stat --printf '%s\n' "$APK_PATH")
+          echo "APK size: ${APK_SIZE} bytes (threshold: 10,485,760 bytes = 10 MB binary)"
+          if [ "$APK_SIZE" -gt 10485760 ]; then
+            echo "::error::APK exceeds 10 MB binary cap (${APK_SIZE} bytes). NFR2 violated. Audit recent dependency additions before re-tagging."
+            exit 1
+          fi
+          echo "OK"
+
+      # Story 7.3 — extract CHANGELOG excerpt for the GitHub Release body.
+      # Match `## [<version>]` heading and the next `## [` heading
+      # (exclusive). Falls back to auto-generated notes when the section
+      # is absent (rc tags, hotfixes without a CHANGELOG bump).
+      - name: Extract CHANGELOG excerpt for Release body
+        id: changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "Extracting CHANGELOG section for v${TAG_VERSION}"
+          # F4 code-review patch: use awk `index()` for LITERAL-string
+          # matching of `## [<version>]` instead of regex interpolation —
+          # so tag versions containing `.`, `-`, `+` (e.g. `0.1.0-rc1`,
+          # `0.1.0+build5`) match the CHANGELOG heading byte-for-byte
+          # without ERE special-char surprises. `index($0, ...) == 1`
+          # asserts the heading starts at column 1 (no leading whitespace).
+          EXCERPT=$(awk -v v="$TAG_VERSION" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found
+          ' CHANGELOG.md)
+          if [ -z "${EXCERPT// /}" ]; then
+            echo "::warning::No CHANGELOG section found for v${TAG_VERSION}. Falling back to auto-generated release notes."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fallback=false" >> "$GITHUB_OUTPUT"
+            # F1 code-review patch:
+            #   (1) Higher-entropy heredoc delimiter (run id + $RANDOM
+            #       combination) so a CHANGELOG line that happens to
+            #       literally read `RELEASE_BODY_EOF` cannot terminate
+            #       the multi-line output early.
+            #   (2) `printf '%s\n'` instead of `echo "$EXCERPT"` —
+            #       `echo` interprets backslash escapes on some shells,
+            #       which would mangle CHANGELOG content containing
+            #       paths, code-fence escapes, or literal `\n` strings.
+            DELIM="RELEASE_BODY_EOF_${GITHUB_RUN_ID:-0}_${RANDOM}_${RANDOM}"
+            {
+              printf 'body<<%s\n' "$DELIM"
+              printf '%s\n' "$EXCERPT"
+              printf '%s\n' "$DELIM"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload APK to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.apk.outputs.path }}
           fail_on_unmatched_files: true
-          generate_release_notes: true
+          # `body:` wins when present. When the CHANGELOG section is absent,
+          # the step above sets fallback=true + leaves body unset, so this
+          # conditional flips on generate_release_notes for the fallback.
+          body: ${{ steps.changelog.outputs.body }}
+          generate_release_notes: ${{ steps.changelog.outputs.fallback == 'true' }}
