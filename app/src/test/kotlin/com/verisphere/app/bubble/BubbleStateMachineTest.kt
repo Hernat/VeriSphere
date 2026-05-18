@@ -260,9 +260,17 @@ class BubbleStateMachineTest {
         runCurrent()
         assertEquals(BubbleState.Verdict(record, tooltipFaded = false), sm.state.value)
 
+        // The tooltipFadeJob chains AutoFadeTimeout → delay(TOOLTIP_DISMISS_DELAY_MS)
+        // → BackToIdle. Step 1: advance past TOOLTIP_FADE_MS but stay before
+        // the chained dismiss delay → assert tooltipFaded=true. Step 2: advance
+        // past TOOLTIP_DISMISS_DELAY_MS → assert Idle.
         advanceTimeBy(1)
-        advanceUntilIdle()
+        runCurrent()
         assertEquals(BubbleState.Verdict(record, tooltipFaded = true), sm.state.value)
+
+        advanceTimeBy(BubbleStateMachine.TOOLTIP_DISMISS_DELAY_MS)
+        runCurrent()
+        assertEquals(BubbleState.Idle(faded = false), sm.state.value)
     }
 
     @Test
@@ -576,9 +584,22 @@ class BubbleStateMachineTest {
         runCurrent()
         assertEquals("Tooltip should not yet be faded", expectedEntry, sm.state.value)
 
+        // The tooltipFadeJob chains AutoFadeTimeout → delay(TOOLTIP_DISMISS_DELAY_MS)
+        // → BackToIdle. Step over TOOLTIP_FADE_MS using runCurrent() so we
+        // observe the faded state BEFORE the chained dismissal fires.
         advanceTimeBy(1)
-        advanceUntilIdle()
+        runCurrent()
         assertEquals("Tooltip should be faded after TOOLTIP_FADE_MS", expectedFaded, sm.state.value)
+
+        // After the chained dismiss delay, the bubble returns to Idle
+        // (primary-blue) and the 5 s adaptive-presence fade re-arms.
+        advanceTimeBy(BubbleStateMachine.TOOLTIP_DISMISS_DELAY_MS)
+        runCurrent()
+        assertEquals(
+            "Bubble should return to Idle after the post-fade dismiss delay",
+            BubbleState.Idle(faded = false),
+            sm.state.value,
+        )
     }
 
     @Test

@@ -63,6 +63,7 @@ data class SessionRecord(
     val contextLines: List<String>,
     val sourceLinks: List<SourceCitation>,
     val ocrText: String,
+    val extractedClaim: String = "",
     val regionalBiasNote: String? = null,
     val injectionDetected: Boolean = false,
 )

@@ -389,6 +389,18 @@ class BubbleStateMachine(
                 delay(TOOLTIP_FADE_MS)
                 ensureActive()
                 onEvent(BubbleEvent.AutoFadeTimeout)
+                // After the tooltip text + Surface have faded out (alpha
+                // animation in FlashTooltip runs over TEXT_FADE_MS = 300 ms),
+                // auto-dispatch BackToIdle so the bubble returns to its
+                // primary-blue Idle colour and the 5 s adaptive-presence
+                // fade re-arms via handleTransitionSideEffects'
+                // `enteredIdleNotFaded` branch. User interaction
+                // (BackToIdle, LongPressStarted, UserActivity → re-entry)
+                // cancels this same Job via `leavingTooltipState` so the
+                // chained dismissal is superseded cleanly.
+                delay(TOOLTIP_DISMISS_DELAY_MS)
+                ensureActive()
+                onEvent(BubbleEvent.BackToIdle)
             }
         }
 
@@ -419,5 +431,14 @@ class BubbleStateMachine(
 
         /** UX-DR6 — tooltip text fade after 5–8 s; midpoint of the range. */
         const val TOOLTIP_FADE_MS: Long = 6_000L
+
+        /**
+         * Delay between `AutoFadeTimeout` (tooltip alpha animation start)
+         * and the chained `BackToIdle` that returns the bubble to its
+         * primary-blue Idle colour. Matches the FlashTooltip alpha tween
+         * duration so the user sees the tooltip fade out completely
+         * before the bubble colour swaps back.
+         */
+        const val TOOLTIP_DISMISS_DELAY_MS: Long = 300L
     }
 }

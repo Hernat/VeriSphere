@@ -375,6 +375,7 @@ class GeminiClient(
         contextLines = verdict.contextLines,
         sourceLinks = verdict.sources,
         ocrText = verdict.ocrText,
+        extractedClaim = verdict.extractedClaim,
         regionalBiasNote = verdict.regionalBiasNote,
         // Story 3.1 — preserve the model's anti-injection self-report
         // (FR8) into the persisted record. Story 3.3 reads this to

@@ -1,7 +1,10 @@
 package com.verisphere.app.bubble.ui
 
 import android.content.res.Configuration
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
+import android.view.MotionEvent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -22,6 +25,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -31,9 +35,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.colorResource
@@ -209,25 +215,36 @@ fun BubbleOverlay(
         staticBubbleBackground
     }
 
+    // Native MotionEvent-based gesture handling via `pointerInteropFilter`
+    // (Hernat 2026-05-18 drag-smoothness rewrite). Compose's coroutine-based
+    // pointerInput awaitEachGesture dispatches events through a Recomposer-
+    // bound channel; the latency + uneven coalescing was causing the
+    // observable jitter + slight delay during drag on physical devices.
+    // pointerInteropFilter delivers raw MotionEvents synchronously on the
+    // main thread, matching the standard View.OnTouchListener path that
+    // Messenger / Bubbles API / every native overlay drag uses.
+    val gestureState = remember(density) { BubbleGestureState(density) }
+    SideEffect {
+        gestureState.onUserActivity = onUserActivity
+        gestureState.onLongPressStart = onLongPressStart
+        gestureState.onPressCancelled = onPressCancelled
+        gestureState.onTap = onTap
+        gestureState.onTapNearMiss = onTapNearMiss
+        gestureState.onLongPress = onLongPress
+        gestureState.onDragDelta = onDragDelta
+        gestureState.onDragEnd = onDragEnd
+    }
+
+    @OptIn(ExperimentalComposeUiApi::class)
+    val gestureModifier = Modifier.pointerInteropFilter { event ->
+        gestureState.onTouchEvent(event)
+    }
+
     Box(
         modifier = modifier
             .size(BUBBLE_HALO_DIAMETER_DP)
             .semantics(mergeDescendants = false) { }
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    handleGesture(
-                        density = density,
-                        onUserActivity = onUserActivity,
-                        onLongPressStart = onLongPressStart,
-                        onPressCancelled = onPressCancelled,
-                        onTap = onTap,
-                        onTapNearMiss = onTapNearMiss,
-                        onLongPress = onLongPress,
-                        onDragDelta = onDragDelta,
-                        onDragEnd = onDragEnd,
-                    )
-                }
-            },
+            .then(gestureModifier),
         contentAlignment = Alignment.Center,
     ) {
         // Story 6.2 — 56 dp inner Box wraps the visible bubble + the
@@ -360,6 +377,167 @@ private fun bubbleBackgroundColorFor(state: BubbleState, reduceMotion: Boolean):
     // `state` into failureBackgroundFor for per-variant palette lookup.
     state is BubbleState.FailureState -> colorResource(failureBackgroundFor(state))
     else -> MaterialTheme.colorScheme.primary
+}
+
+/**
+ * MotionEvent-based gesture state holder (Hernat 2026-05-18 drag-smoothness
+ * rewrite). Replaces the Compose coroutine-based `awaitEachGesture` path
+ * with a synchronous View.OnTouchListener-equivalent state machine.
+ *
+ * **Why** — the Compose `pointerInput { awaitEachGesture }` path
+ * dispatches pointer events through a Recomposer-bound suspending
+ * channel; the per-event latency + uneven coalescing was causing
+ * observable jitter + slight finger-to-bubble lag during drag on real
+ * Android devices (Hernat 2026-05-18 jank diagnostic). MotionEvent
+ * delivery via `pointerInteropFilter` is synchronous on the main thread,
+ * matching the native View path that Messenger / Bubbles API use.
+ *
+ * State machine semantics mirror [handleGesture] one-to-one:
+ *  - ACTION_DOWN → fire [onUserActivity]; if landing on the 56 dp
+ *    visible bubble, also fire [onLongPressStart] + schedule the 1 s
+ *    long-press timer via Handler.postDelayed.
+ *  - ACTION_MOVE → accumulate motion; when totalMotion > 4 dp AND
+ *    initially-on-bubble, promote to drag mode and emit [onDragDelta]
+ *    per event.
+ *  - ACTION_UP → cancel long-press timer; dispatch the appropriate
+ *    end-of-gesture callback (drag-end / tap / tap-near-miss / press-
+ *    cancelled) per the gesture grammar.
+ *  - ACTION_CANCEL → cancel long-press; if in drag mode fire [onDragEnd].
+ *
+ * Callbacks are `var` so the composition can update them via
+ * `SideEffect` each recomposition — the state holder itself lives in
+ * `remember(density) { ... }` so per-frame allocation is avoided.
+ */
+private class BubbleGestureState(density: Density) {
+    private val dragThresholdPx: Float = with(density) { DRAG_THRESHOLD_DP.dp.toPx() }
+    private val bubbleRadiusPx: Float = with(density) { (BUBBLE_DIAMETER_DP.value / 2f).dp.toPx() }
+    private val haloCentrePx: Float = with(density) { (BUBBLE_HALO_DIAMETER_DP.value / 2f).dp.toPx() }
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    var onUserActivity: () -> Unit = {}
+    var onLongPressStart: () -> Unit = {}
+    var onPressCancelled: () -> Unit = {}
+    var onTap: () -> Unit = {}
+    var onTapNearMiss: () -> Unit = {}
+    var onLongPress: () -> Unit = {}
+    var onDragDelta: (Float, Float) -> Unit = { _, _ -> }
+    var onDragEnd: () -> Unit = {}
+
+    private var downLocalX = 0f
+    private var downLocalY = 0f
+    private var downTime = 0L
+    private var downOnBubble = false
+    // Screen-absolute coords (event.rawX / rawY) — used for delta math
+    // because the View moves with the bubble during drag, so event.x/y
+    // (View-local) shifts with the View. Computing per-event deltas off
+    // event.x would create a feedback loop (Hernat 2026-05-18 trembling
+    // fix). event.rawX/rawY stay in screen coordinates, immune to View
+    // motion.
+    private var lastRawX = 0f
+    private var lastRawY = 0f
+    private var totalDragPx = 0f
+    private var inDragMode = false
+    private var longPressFired = false
+    private var longPressRunnable: Runnable? = null
+
+    fun onTouchEvent(event: MotionEvent): Boolean {
+        return when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> handleDown(event)
+            MotionEvent.ACTION_MOVE -> handleMove(event)
+            MotionEvent.ACTION_UP -> handleUp(event)
+            MotionEvent.ACTION_CANCEL -> handleCancel()
+            // ACTION_POINTER_DOWN / ACTION_POINTER_UP: secondary fingers
+            // are ignored (mirrors the original first-pointer-only logic
+            // in handleGesture). Return true to consume so the system
+            // doesn't reroute.
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> true
+            else -> false
+        }
+    }
+
+    private fun handleDown(event: MotionEvent): Boolean {
+        downLocalX = event.x
+        downLocalY = event.y
+        downTime = event.eventTime
+        // View-local position is stable at DOWN (View hasn't moved yet)
+        // so isInsideBubbleCircle uses event.x/y here.
+        downOnBubble = isInsideBubbleCircle(downLocalX, downLocalY)
+        lastRawX = event.rawX
+        lastRawY = event.rawY
+        totalDragPx = 0f
+        inDragMode = false
+        longPressFired = false
+
+        onUserActivity()
+        if (downOnBubble) {
+            onLongPressStart()
+            val cb = Runnable {
+                if (!inDragMode && downOnBubble && totalDragPx <= dragThresholdPx) {
+                    longPressFired = true
+                    onLongPress()
+                }
+            }
+            longPressRunnable = cb
+            mainHandler.postDelayed(cb, LONG_PRESS_MS)
+        }
+        return true
+    }
+
+    private fun handleMove(event: MotionEvent): Boolean {
+        // Screen-absolute delta (rawX/rawY) — see field-level comment.
+        // This makes per-event deltas reflect actual finger motion in
+        // screen pixels, regardless of how much the bubble's host View
+        // has moved between events.
+        val dx = event.rawX - lastRawX
+        val dy = event.rawY - lastRawY
+        lastRawX = event.rawX
+        lastRawY = event.rawY
+        totalDragPx += hypot(dx, dy)
+
+        if (!inDragMode && totalDragPx > dragThresholdPx && downOnBubble) {
+            inDragMode = true
+            cancelLongPress()
+        }
+
+        if (inDragMode) {
+            onDragDelta(dx, dy)
+        }
+        return true
+    }
+
+    private fun handleUp(event: MotionEvent): Boolean {
+        cancelLongPress()
+        val elapsedMs = event.eventTime - downTime
+        when {
+            inDragMode -> onDragEnd()
+            longPressFired -> Unit
+            totalDragPx > dragThresholdPx -> Unit
+            downOnBubble && elapsedMs < TAP_TIMEOUT_MS -> onTap()
+            !downOnBubble -> onTapNearMiss()
+            // Press released on bubble after ≥ TAP_TIMEOUT_MS but
+            // before LONG_PRESS_MS: user started a long-press and
+            // let go early → onPressCancelled (Story 1.10 semantics).
+            downOnBubble -> onPressCancelled()
+        }
+        return true
+    }
+
+    private fun handleCancel(): Boolean {
+        cancelLongPress()
+        if (inDragMode) onDragEnd()
+        return true
+    }
+
+    private fun cancelLongPress() {
+        longPressRunnable?.let { mainHandler.removeCallbacks(it) }
+        longPressRunnable = null
+    }
+
+    private fun isInsideBubbleCircle(x: Float, y: Float): Boolean {
+        val dx = x - haloCentrePx
+        val dy = y - haloCentrePx
+        return hypot(dx, dy) <= bubbleRadiusPx
+    }
 }
 
 /**

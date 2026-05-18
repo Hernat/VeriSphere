@@ -64,9 +64,13 @@ import kotlin.math.roundToInt
  *
  * **Auto-fade** (UX-DR6 line 679): the [textFaded] flag flips after the
  * 5–8 s timer fires in [com.verisphere.app.bubble.BubbleStateMachine].
- * The text alpha animates from 1.0 to 0.0 over [TEXT_FADE_MS] ms; the
- * Surface background stays fully opaque so the bubble retains its
- * semantic colour until the next user gesture.
+ * The ENTIRE tooltip (Surface background + pointer triangle + text)
+ * fades from alpha 1.0 → 0.0 over [TEXT_FADE_MS] ms — applied on the
+ * outer [Row] modifier so the empty Surface does not linger after the
+ * text disappears. After the fade animation the state machine
+ * auto-dispatches `BackToIdle` ([BubbleStateMachine.TOOLTIP_DISMISS_DELAY_MS]
+ * after the AutoFadeTimeout); the bubble returns to its primary-blue
+ * Idle colour and the adaptive-presence fade then dissipates it.
  *
  * **Accessibility** (UX-DR6 line 680, UX-DR18):
  *  - `Modifier.semantics { liveRegion = LiveRegionMode.Polite }` so
@@ -103,10 +107,10 @@ fun FlashTooltip(
     val backgroundColor = colorResource(verdictBackgroundFor(verdictLabel))
     val verdictTextColor = verdictTextColorFor(verdictLabel)
     val headlineColor = colorResource(verdictHeadlineColorFor(verdictLabel))
-    val textAlpha by animateFloatAsState(
+    val tooltipAlpha by animateFloatAsState(
         targetValue = if (textFaded) 0f else 1f,
         animationSpec = tween(durationMillis = TEXT_FADE_MS),
-        label = "tooltipTextAlpha",
+        label = "tooltipAlpha",
     )
 
     val verdictContentDescription = stringResource(verdictContentDescriptionFor(verdictLabel)) +
@@ -115,6 +119,7 @@ fun FlashTooltip(
     Row(
         modifier = modifier
             .widthIn(max = maxWidthDp)
+            .alpha(tooltipAlpha)
             .semantics(mergeDescendants = true) {
                 contentDescription = verdictContentDescription
                 if (textFaded) {
@@ -157,8 +162,7 @@ fun FlashTooltip(
                     .padding(
                         horizontal = HORIZONTAL_PADDING_DP.dp,
                         vertical = VERTICAL_PADDING_DP.dp,
-                    )
-                    .alpha(textAlpha),
+                    ),
             ) {
                 Text(
                     text = stringResource(verdictWordResFor(verdictLabel)),
@@ -486,10 +490,10 @@ fun FailureFlashTooltip(
     val backgroundColor = colorResource(failureBackgroundFor(failure))
     val wordColor = failureFlashTextColorFor(failure)
     val headlineColor = colorResource(failureHeadlineColorFor(failure))
-    val textAlpha by animateFloatAsState(
+    val tooltipAlpha by animateFloatAsState(
         targetValue = if (textFaded) 0f else 1f,
         animationSpec = tween(durationMillis = TEXT_FADE_MS),
-        label = "failureTooltipTextAlpha",
+        label = "failureTooltipAlpha",
     )
 
     val headline = stringResource(failureFlashHeadlineResFor(failure))
@@ -514,6 +518,7 @@ fun FailureFlashTooltip(
     Row(
         modifier = modifier
             .widthIn(max = maxWidthDp)
+            .alpha(tooltipAlpha)
             .semantics(mergeDescendants = true) {
                 contentDescription = failureContentDescription
                 if (textFaded) {
@@ -552,8 +557,7 @@ fun FailureFlashTooltip(
                     .padding(
                         horizontal = HORIZONTAL_PADDING_DP.dp,
                         vertical = VERTICAL_PADDING_DP.dp,
-                    )
-                    .alpha(textAlpha),
+                    ),
             ) {
                 Text(
                     text = stringResource(failureFlashWordResFor(failure)),

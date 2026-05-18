@@ -36,6 +36,21 @@
          detail_built_with_gemini stays English per FR14 attribution invariant
          (Story 7.4 MS7 phrase pin per Google Gemini API attribution guidelines). -->
     <string name="detail_ocr_title">Texte lu</string>
+    <!-- New since prompt v1 ext-claim addition — the cleanly-extracted claim
+         Gemini actually fact-checked (vs `ocrText` full verbatim). -->
+    <string name="detail_extracted_claim_title">Texte analysé</string>
+    <string name="detail_raw_ocr_title">Texte brut détecté</string>
+    <string name="detail_raw_ocr_show">Afficher</string>
+    <string name="detail_raw_ocr_hide">Masquer</string>
+
+    <!-- Chat-heads history overlay (Hernat 2026-05-18). Tap the Idle bubble
+         to attach a floating list of past verdicts; tap an item to swap to
+         detail; back/outside/swipe-down dismisses. -->
+    <string name="history_overlay_title">Historique</string>
+    <string name="history_overlay_detail_title">Détail</string>
+    <string name="history_overlay_empty">Aucune vérification pour l\'instant.</string>
+    <string name="history_overlay_back_action">Retour à la liste</string>
+    <string name="history_overlay_close_action">Fermer</string>
     <string name="detail_sources_title">Sources</string>
     <string name="detail_sources_unavailable">Aucune source corroborante trouvée.</string>
     <string name="detail_padlock_copy">Personne d\'autre ne le voit. C\'est entre toi et nous.</string>

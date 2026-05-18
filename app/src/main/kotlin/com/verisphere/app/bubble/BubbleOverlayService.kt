@@ -16,6 +16,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
@@ -51,7 +52,11 @@ import com.verisphere.app.accessibility.VeriSphereAccessibilityService
 import com.verisphere.app.bubble.ui.BubbleOverlay
 import com.verisphere.app.bubble.ui.FailureFlashTooltip
 import com.verisphere.app.bubble.ui.FlashTooltip
+import com.verisphere.app.bubble.ui.HistoryOverlayContent
 import com.verisphere.app.bubble.ui.PointerDirection
+import com.verisphere.app.bubble.ui.TrashOverlayContent
+import com.verisphere.app.bubble.ui.BOTTOM_PADDING_DP as TRASH_BOTTOM_PADDING_DP
+import com.verisphere.app.bubble.ui.CIRCLE_DIAMETER_DP as TRASH_CIRCLE_DIAMETER_DP
 import com.verisphere.app.capture.CapturePipeline
 import com.verisphere.app.gemini.VerificationOutcome
 import com.verisphere.app.storage.SessionRecord
@@ -64,8 +69,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
@@ -235,6 +243,21 @@ class BubbleOverlayService :
     private var tooltipView: ComposeView? = null
     private var tooltipParams: WindowManager.LayoutParams? = null
 
+    // Chat-heads history overlay (Hernat 2026-05-18). Dedicated WindowManager
+    // window so the bubble + tooltip windows are untouched. The window is
+    // focusable (no FLAG_NOT_FOCUSABLE) so the system routes the hardware /
+    // gesture Back key to its setOnKeyListener → hideHistoryOverlay()/back.
+    // Lifecycle: attach on Idle × Tap (replaces the launchHistoryActivity()
+    // path) + detail-from-bubble taps; detach on dismiss / back from List.
+    private var historyOverlayView: ComposeView? = null
+    private var historyOverlayParams: WindowManager.LayoutParams? = null
+    private val historyOverlayMode: MutableStateFlow<HistoryOverlayMode> =
+        MutableStateFlow(HistoryOverlayMode.Hidden)
+    private val historyRecordsFlow: StateFlow<List<SessionRecord>> by lazy {
+        container.historyRepository.observe()
+            .stateIn(serviceScope, SharingStarted.Eagerly, emptyList())
+    }
+
     // Story 7.4 P3 (code-review patch) — cached main-looper Handler.
     // Was previously instantiated per-call inside updateTooltipWindowLayout
     // which allocated a fresh Handler on every drag delta (~60 fps); the
@@ -258,6 +281,42 @@ class BubbleOverlayService :
     // end so the next gesture starts clean.
     private var pendingDx: Float = 0f
     private var pendingDy: Float = 0f
+
+    // Drag-smoothness cache (Hernat 2026-05-18). Querying
+    // `windowManager.currentWindowMetrics.bounds` is a binder IPC into
+    // system_server; calling it on every drag delta (60 fps) was the main
+    // jank culprit. Cache the dims + density-derived px on attach +
+    // refresh on configuration changes.
+    @Volatile
+    private var cachedScreenWidthPx: Int = 0
+    @Volatile
+    private var cachedScreenHeightPx: Int = 0
+    @Volatile
+    private var cachedBubbleSizePx: Int = 0
+    @Volatile
+    private var cachedHaloSizePx: Int = 0
+    @Volatile
+    private var cachedHaloOffsetPx: Int = 0
+    @Volatile
+    private var cachedInsetPx: Int = 0
+    @Volatile
+    private var cachedTrashCentreXPx: Int = 0
+    @Volatile
+    private var cachedTrashCentreYPx: Int = 0
+    @Volatile
+    private var cachedTrashHitRadiusSqPx: Float = 0f
+    @Volatile
+    private var isDragActive: Boolean = false
+
+
+    // Trash overlay (Hernat 2026-05-18). Bottom-anchored "drop to close"
+    // affordance mounted while [isDragActive] is true; bubble centre is
+    // hit-tested against the trash zone each drag delta. On ACTION_UP
+    // while overlapping, the service stops itself ([closeBubble]); the
+    // user re-summons the bubble by re-opening the VeriSphere app
+    // (MainActivity.onResume → startForegroundService).
+    private var trashOverlayView: ComposeView? = null
+    private val isBubbleOverTrash: MutableStateFlow<Boolean> = MutableStateFlow(false)
 
     override val lifecycle: Lifecycle get() = lifecycleRegistry
     override val savedStateRegistry: SavedStateRegistry
@@ -415,6 +474,14 @@ class BubbleOverlayService :
         tooltipObserverJob?.cancel()
         tooltipObserverJob = null
         detachTooltipView()
+        // Chat-heads overlay teardown — mirrors the tooltip path so the
+        // window is removed BEFORE serviceScope cancellation invalidates
+        // the windowManager reference.
+        detachHistoryOverlay()
+        // Trash overlay teardown — also before serviceScope cancellation.
+        // Normally already detached on dragEnd, but defensive in case the
+        // service is killed mid-drag (memory pressure / OS kill path).
+        detachTrashOverlay()
         // Story 1.8.5: no MediaProjection token to release — the
         // VeriSphereAccessibilityService owns its own lifecycle via
         // Settings (D5.13). The bubble service tear-down is now leaner.
@@ -486,11 +553,12 @@ class BubbleOverlayService :
     }
 
     private fun attachOverlayView() {
-        val (screenWidthPx, screenHeightPx) = currentWindowSizePx()
-        val density = resources.displayMetrics.density
-        val bubbleSizePx = (BUBBLE_DIAMETER_DP * density).roundToInt()
-        val haloSizePx = (BUBBLE_HALO_DIAMETER_DP * density).roundToInt()
-        val insetPx = (EDGE_INSET_DP * density).roundToInt()
+        refreshDimsCache()
+        val screenWidthPx = cachedScreenWidthPx
+        val screenHeightPx = cachedScreenHeightPx
+        val bubbleSizePx = cachedBubbleSizePx
+        val haloSizePx = cachedHaloSizePx
+        val insetPx = cachedInsetPx
 
         // Default position: right edge, vertically centred. Computed
         // against the visible bubble (56 dp), not the halo window — the
@@ -705,12 +773,12 @@ class BubbleOverlayService :
         val sourceSnapshot = lastNonPressingState
         if (tappableSnapshot != null) {
             bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
-            launchDetailPanelActivity(tappableSnapshot.id)
+            showHistoryOverlayDetail(tappableSnapshot.id)
         } else {
             bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
             handleIdleBubbleTap(
                 sourceState = sourceSnapshot,
-                onLaunchHistory = ::launchHistoryActivity,
+                onLaunchHistory = ::showHistoryOverlayList,
             )
         }
     }
@@ -752,7 +820,7 @@ class BubbleOverlayService :
         // to Idle as if no press happened) and launch the panel.
         if (currentState is BubbleState.Pressing && tappableSnapshot != null) {
             bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
-            launchDetailPanelActivity(tappableSnapshot.id)
+            showHistoryOverlayDetail(tappableSnapshot.id)
             return
         }
 
@@ -781,7 +849,7 @@ class BubbleOverlayService :
             bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
             handleIdleBubbleTap(
                 sourceState = sourceSnapshot,
-                onLaunchHistory = ::launchHistoryActivity,
+                onLaunchHistory = ::showHistoryOverlayList,
             )
             return
         }
@@ -790,7 +858,7 @@ class BubbleOverlayService :
         // theoretical race), route normally via the pure helper.
         handleTappableBubbleTap(
             state = currentState,
-            onLaunchPanel = ::launchDetailPanelActivity,
+            onLaunchPanel = ::showHistoryOverlayDetail,
         )
     }
 
@@ -1111,11 +1179,17 @@ class BubbleOverlayService :
 
         if (!overlayAttached || !::params.isInitialized) return
 
-        val (screenWidthPx, screenHeightPx) = currentWindowSizePx()
-        val density = resources.displayMetrics.density
-        val bubbleSizePx = (BUBBLE_DIAMETER_DP * density).roundToInt()
-        val haloSizePx = (BUBBLE_HALO_DIAMETER_DP * density).roundToInt()
-        val haloOffsetPx = (haloSizePx - bubbleSizePx) / 2
+        // First drag delta of a gesture flips the active flag and
+        // mounts the trash overlay (Hernat 2026-05-18 close-by-drag UX).
+        if (!isDragActive) {
+            isDragActive = true
+            attachTrashOverlay()
+        }
+
+        val screenWidthPx = cachedScreenWidthPx
+        val screenHeightPx = cachedScreenHeightPx
+        val bubbleSizePx = cachedBubbleSizePx
+        val haloOffsetPx = cachedHaloOffsetPx
 
         // During drag we permit the bubble to touch the screen edge
         // (no inset clamping); the snap on ACTION_UP pulls it back to
@@ -1125,12 +1199,9 @@ class BubbleOverlayService :
         val minY = -haloOffsetPx
         val maxY = screenHeightPx - bubbleSizePx - haloOffsetPx
 
-        // Drag-rounding accumulator (Story 1.7 review fix #4): per-frame
-        // dxPx/dyPx are floats; rounding each independently truncates
-        // sub-pixel motion (≈ 0.4 px/frame on slow drags rounds to 0
-        // every frame → bubble stays still). Add the float into a pending
-        // accumulator, take the integer portion, keep the fractional
-        // remainder for the next frame.
+        // Drag-rounding accumulator (Story 1.7 review fix #4): preserve
+        // sub-pixel motion across frames so slow drags don't lose
+        // ≈ 0.4 px/frame to integer truncation.
         pendingDx += dxPx
         pendingDy += dyPx
         val intDx = pendingDx.toInt()
@@ -1138,12 +1209,35 @@ class BubbleOverlayService :
         pendingDx -= intDx
         pendingDy -= intDy
 
+        // Skip updateViewLayout when there's no integer pixel motion
+        // this frame (Hernat 2026-05-18 — article-recommended slop guard).
+        // updateViewLayout is a binder IPC into system_server; calling it
+        // with the same params wastes the round-trip + can amplify
+        // micro-jitter feedback when input events arrive faster than the
+        // window position settles on the surface.
+        if (intDx == 0 && intDy == 0) return
+
         params.x = (params.x + intDx).coerceIn(minX, maxX)
         params.y = (params.y + intDy).coerceIn(minY, maxY)
         safeUpdateViewLayout()
-        // Story 1.10 — keep the tooltip overlay in lock-step with the
-        // bubble during drag (UX-DR14 row "Verdict × Drag = Reposition").
-        publishBubblePosition()
+        if (tooltipView != null) publishBubblePosition()
+        isBubbleOverTrash.value = bubbleOverlapsTrash()
+    }
+
+    /**
+     * True when the visible-bubble centre is within
+     * [TRASH_HIT_RADIUS_DP] of the trash glyph centre. Trash glyph is
+     * anchored bottom-centre at [TRASH_BOTTOM_PADDING_DP] from the
+     * bottom edge with diameter [TRASH_CIRCLE_DIAMETER_DP]; centre is
+     * `(screenWidth / 2, screenHeight - bottomPad - diameter / 2)`.
+     */
+    private fun bubbleOverlapsTrash(): Boolean {
+        val bubbleCentreX = params.x + cachedHaloSizePx / 2
+        val bubbleCentreY = params.y + cachedHaloSizePx / 2
+        val dx = (bubbleCentreX - cachedTrashCentreXPx).toFloat()
+        val dy = (bubbleCentreY - cachedTrashCentreYPx).toFloat()
+        // Compare squared distances to avoid the per-frame sqrt in hypot().
+        return dx * dx + dy * dy <= cachedTrashHitRadiusSqPx
     }
 
     private fun onBubbleDragEnd() {
@@ -1152,15 +1246,40 @@ class BubbleOverlayService :
         pendingDx = 0f
         pendingDy = 0f
 
+        val droppedOverTrash = isBubbleOverTrash.value
+        isDragActive = false
+        isBubbleOverTrash.value = false
+        detachTrashOverlay()
+
+        if (droppedOverTrash) {
+            closeBubble()
+            return
+        }
+
         if (!overlayAttached || !::params.isInitialized) return
 
-        val (screenWidthPx, screenHeightPx) = currentWindowSizePx()
-        val density = resources.displayMetrics.density
-        val bubbleSizePx = (BUBBLE_DIAMETER_DP * density).roundToInt()
-        val haloSizePx = (BUBBLE_HALO_DIAMETER_DP * density).roundToInt()
-        val haloOffsetPx = (haloSizePx - bubbleSizePx) / 2
-        val insetPx = (EDGE_INSET_DP * density).roundToInt()
+        // Return the state machine to Idle so the 5 s adaptive-presence
+        // fade timer arms (Hernat 2026-05-19 opacity-bug fix). Touch-down
+        // dispatched LongPressStarted → Pressing; without an explicit
+        // BackToIdle here the state stayed in Pressing forever after a
+        // drag, and Pressing has no auto-fade timer attached →
+        // [handleTransitionSideEffects.enteredIdleNotFaded] only fires
+        // on Idle entry. The reducer accepts Pressing / Verdict /
+        // FailureState as BackToIdle source states, so this works
+        // regardless of pre-drag state (drag from Verdict state was
+        // already going to lose the verdict on ACTION_DOWN's
+        // LongPressStarted → Pressing transition, so no UX regression).
+        bubbleStateMachine.onEvent(BubbleEvent.BackToIdle)
 
+        val screenWidthPx = cachedScreenWidthPx
+        val screenHeightPx = cachedScreenHeightPx
+        val bubbleSizePx = cachedBubbleSizePx
+        val haloSizePx = cachedHaloSizePx
+        val haloOffsetPx = cachedHaloOffsetPx
+        val insetPx = cachedInsetPx
+
+        // Magnetic snap to the nearest horizontal edge (UX-DR5). The
+        // visible bubble centre decides left vs right.
         val visibleBubbleCentreX = params.x + haloSizePx / 2
         val targetX = if (visibleBubbleCentreX < screenWidthPx / 2) {
             insetPx - haloOffsetPx
@@ -1168,8 +1287,7 @@ class BubbleOverlayService :
             screenWidthPx - bubbleSizePx - insetPx - haloOffsetPx
         }
 
-        // Vertical clamp to keep the visible bubble within the inset
-        // band — no vertical snap, only horizontal (UX-DR5).
+        // Vertical clamp to keep the visible bubble within the inset band.
         val minY = insetPx - haloOffsetPx
         val maxY = screenHeightPx - bubbleSizePx - insetPx - haloOffsetPx
         params.y = params.y.coerceIn(minY, maxY)
@@ -1187,12 +1305,7 @@ class BubbleOverlayService :
                 // Animatable.animateTo. serviceScope's Dispatchers.Main.immediate
                 // does NOT carry a MonotonicFrameClock (Activity-side Compose
                 // gets it for free via the Recomposer; a non-Activity Service
-                // host must opt in explicitly). Without this withContext,
-                // every drag-end crashes with "A MonotonicFrameClock is not
-                // available in this CoroutineContext" — surfaced for the
-                // first time during Story 1.8's manual smoke test on the AVD
-                // (Story 1.7's connectedDebugAndroidTest gate had not been
-                // run on real hardware).
+                // host must opt in explicitly).
                 withContext(AndroidUiDispatcher.Main) {
                     animateSnapToX(targetX.toFloat())
                 }
@@ -1403,7 +1516,7 @@ class BubbleOverlayService :
                             verdict = s,
                             bubblePosition = bubblePosition,
                             density = resources.displayMetrics.density,
-                            onTooltipClick = { launchDetailPanelActivity(s.record.id) },
+                            onTooltipClick = { showHistoryOverlayDetail(s.record.id) },
                             onTooltipLayout = ::updateTooltipWindowLayout,
                         )
                         is BubbleState.FailureState -> FailureTooltipOverlayContent(
@@ -1412,7 +1525,7 @@ class BubbleOverlayService :
                             density = resources.displayMetrics.density,
                             onTooltipClick = {
                                 if (s is BubbleState.FailureState.PossibleInjection) {
-                                    launchDetailPanelActivity(s.record.id)
+                                    showHistoryOverlayDetail(s.record.id)
                                 }
                                 // Other FailureState variants — onClick is
                                 // gated to no-op at the Composable level
@@ -1513,6 +1626,231 @@ class BubbleOverlayService :
         tooltipParams = null
     }
 
+    // ----- History overlay (Hernat 2026-05-18) ------------------------------
+
+    /**
+     * Show the in-overlay history list as a bottom-anchored chat-heads-style
+     * panel. Replaces the previous [launchHistoryActivity] path so the user
+     * never has to leave the source app to consult past verdicts.
+     */
+    private fun showHistoryOverlayList() {
+        historyOverlayMode.value = HistoryOverlayMode.List
+        attachHistoryOverlay()
+    }
+
+    /**
+     * Show the in-overlay detail panel for a single persisted record.
+     * Replaces the previous [launchDetailPanelActivity] path; called from
+     * [onBubbleTap]'s tappable-snapshot branch AND from list-item taps.
+     */
+    private fun showHistoryOverlayDetail(recordId: String) {
+        historyOverlayMode.value = HistoryOverlayMode.Detail(recordId)
+        attachHistoryOverlay()
+    }
+
+    /**
+     * Dismiss the history overlay entirely (List or Detail mode). Called
+     * on scrim tap, X close button, swipe-down, and Back key when in
+     * List mode.
+     */
+    private fun hideHistoryOverlay() {
+        historyOverlayMode.value = HistoryOverlayMode.Hidden
+        detachHistoryOverlay()
+    }
+
+    /**
+     * Back gesture inside the overlay. From Detail → back to List;
+     * from List → dismiss the overlay.
+     */
+    private fun onHistoryOverlayBack() {
+        when (historyOverlayMode.value) {
+            is HistoryOverlayMode.Detail -> historyOverlayMode.value = HistoryOverlayMode.List
+            else -> hideHistoryOverlay()
+        }
+    }
+
+    private fun attachHistoryOverlay() {
+        if (historyOverlayView != null) return
+        if (!::windowManager.isInitialized) return
+
+        val view = ComposeView(this).apply {
+            setViewTreeLifecycleOwner(this@BubbleOverlayService)
+            setViewTreeSavedStateRegistryOwner(this@BubbleOverlayService)
+            setViewTreeViewModelStoreOwner(this@BubbleOverlayService)
+            // Intercept Back at the View level — the OnBackPressedDispatcher
+            // isn't available outside an Activity-host so `BackHandler` does
+            // nothing here. setOnKeyListener fires for KEYCODE_BACK as long
+            // as the window is focusable (no FLAG_NOT_FOCUSABLE).
+            isFocusableInTouchMode = true
+            requestFocus()
+            setOnKeyListener { _, keyCode, event ->
+                if (keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
+                    onHistoryOverlayBack()
+                    true
+                } else {
+                    false
+                }
+            }
+            setContent {
+                VeriSphereTheme {
+                    val mode by historyOverlayMode.collectAsState()
+                    val records by historyRecordsFlow.collectAsState()
+                    HistoryOverlayContent(
+                        mode = mode,
+                        records = records,
+                        onItemClick = { recordId ->
+                            historyOverlayMode.value = HistoryOverlayMode.Detail(recordId)
+                        },
+                        onBackToList = {
+                            historyOverlayMode.value = HistoryOverlayMode.List
+                        },
+                        onSourceClick = ::launchSourceLink,
+                        onDismiss = ::hideHistoryOverlay,
+                    )
+                }
+            }
+        }
+
+        // Full-screen focusable window. NOT_TOUCH_MODAL is OFF (omitted) so
+        // every touch inside the window goes to it — the Compose scrim
+        // catches taps outside the bottom card and routes to onDismiss.
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            // No FLAG_NOT_FOCUSABLE → window receives key events. The
+            // existing bubble + tooltip windows stay non-focusable so
+            // source-app text-input continues unchanged outside the overlay.
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+        }
+
+        try {
+            windowManager.addView(view, params)
+            historyOverlayView = view
+            historyOverlayParams = params
+        } catch (e: WindowManager.BadTokenException) {
+            Log.w(TAG, "Cannot add history overlay window — overlay permission likely revoked.", e)
+            view.disposeComposition()
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            Log.w(TAG, "History overlay attach failed — degraded mode.", e)
+            view.disposeComposition()
+        }
+    }
+
+    private fun detachHistoryOverlay() {
+        val view = historyOverlayView ?: return
+        if (::windowManager.isInitialized) {
+            try {
+                windowManager.removeView(view)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "History overlay view was already removed by the system.", e)
+            }
+        }
+        view.disposeComposition()
+        historyOverlayView = null
+        historyOverlayParams = null
+    }
+
+    // ----- Trash overlay (Hernat 2026-05-18 close-by-drag) ----------------
+
+    private fun attachTrashOverlay() {
+        if (trashOverlayView != null) return
+        if (!::windowManager.isInitialized) return
+
+        val view = ComposeView(this).apply {
+            setViewTreeLifecycleOwner(this@BubbleOverlayService)
+            setViewTreeSavedStateRegistryOwner(this@BubbleOverlayService)
+            setViewTreeViewModelStoreOwner(this@BubbleOverlayService)
+            setContent {
+                VeriSphereTheme {
+                    val highlighted by isBubbleOverTrash.collectAsState()
+                    TrashOverlayContent(highlighted = highlighted)
+                }
+            }
+        }
+
+        // Bottom-anchored window (~200 dp tall) instead of full-screen —
+        // smaller surface for input dispatch + the bubble drag area never
+        // overlaps the trash window for most of the gesture, drastically
+        // reducing the per-touch system overhead.
+        //
+        // alpha = 0.8 explicitly: with FLAG_NOT_TOUCHABLE Android 12+
+        // enforces alpha ≤ 0.8 (anti tap-jacking) and rewrites alpha at
+        // touch dispatch time when it's higher, logging a WindowManager
+        // warning per touch event and adding latency. Setting 0.8 up front
+        // avoids the rewrite — captured via logcat 2026-05-18 jank diagnostic.
+        val density = resources.displayMetrics.density
+        val windowHeightPx = (TRASH_WINDOW_HEIGHT_DP * density).roundToInt()
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            windowHeightPx,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.START
+            alpha = 0.8f
+        }
+
+        try {
+            windowManager.addView(view, params)
+            trashOverlayView = view
+        } catch (e: WindowManager.BadTokenException) {
+            Log.w(TAG, "Cannot add trash overlay — overlay permission likely revoked.", e)
+            view.disposeComposition()
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            Log.w(TAG, "Trash overlay attach failed — degraded mode.", e)
+            view.disposeComposition()
+        }
+    }
+
+    private fun detachTrashOverlay() {
+        val view = trashOverlayView ?: return
+        if (::windowManager.isInitialized) {
+            try {
+                windowManager.removeView(view)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Trash overlay view was already removed by the system.", e)
+            }
+        }
+        view.disposeComposition()
+        trashOverlayView = null
+    }
+
+    /**
+     * Close the bubble entirely (dropped on the trash glyph). Stops the
+     * foreground service so every window detaches; the user re-summons
+     * the bubble by re-opening the VeriSphere main app
+     * (`MainActivity.onResume` → `startForegroundService`).
+     */
+    private fun closeBubble() {
+        Log.d(TAG, "closeBubble — bubble dropped on trash, stopping service")
+        stopSelf()
+    }
+
+    /**
+     * Resolve a source-link tap from the in-overlay [DetailPanelContent].
+     * Mirrors the in-Activity behaviour (Story 2.4) — wrap in try/catch
+     * for [ActivityNotFoundException] in case no browser handles the
+     * Intent, and tag the Intent with `FLAG_ACTIVITY_NEW_TASK` because
+     * the service is not an Activity context.
+     */
+    private fun launchSourceLink(citation: com.verisphere.app.gemini.SourceCitation) {
+        if (citation.url.isBlank()) return
+        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(citation.url))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "No activity to handle source link — degraded.", e)
+        }
+    }
+
     /**
      * Returns the current display size in pixels via
      * [WindowManager.getCurrentWindowMetrics] (the documented modern path
@@ -1523,6 +1861,39 @@ class BubbleOverlayService :
     private fun currentWindowSizePx(): Pair<Int, Int> {
         val bounds = windowManager.currentWindowMetrics.bounds
         return bounds.width() to bounds.height()
+    }
+
+    /**
+     * Refresh the drag-smoothness cache. Called on attach + on
+     * [onConfigurationChanged] (rotation / display switch). The drag
+     * path reads the cached values instead of issuing a fresh binder
+     * call per frame.
+     */
+    private fun refreshDimsCache() {
+        if (!::windowManager.isInitialized) return
+        val (w, h) = currentWindowSizePx()
+        cachedScreenWidthPx = w
+        cachedScreenHeightPx = h
+        val density = resources.displayMetrics.density
+        cachedBubbleSizePx = (BUBBLE_DIAMETER_DP * density).roundToInt()
+        cachedHaloSizePx = (BUBBLE_HALO_DIAMETER_DP * density).roundToInt()
+        cachedHaloOffsetPx = (cachedHaloSizePx - cachedBubbleSizePx) / 2
+        cachedInsetPx = (EDGE_INSET_DP * density).roundToInt()
+        // Trash centre + hit-radius² pre-computed so the per-frame hit-test
+        // is pure-int arithmetic (no density reads, no sqrt). Bottom-centre
+        // anchored: screenWidth/2 in X; bottom - bottom_pad - circle/2 in Y.
+        val trashCirclePx = (TRASH_CIRCLE_DIAMETER_DP * density).roundToInt()
+        cachedTrashCentreXPx = cachedScreenWidthPx / 2
+        cachedTrashCentreYPx = cachedScreenHeightPx -
+            (TRASH_BOTTOM_PADDING_DP * density).roundToInt() -
+            trashCirclePx / 2
+        val radiusPx = TRASH_HIT_RADIUS_DP * density
+        cachedTrashHitRadiusSqPx = radiusPx * radiusPx
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        refreshDimsCache()
     }
 
     companion object {
@@ -1561,7 +1932,22 @@ class BubbleOverlayService :
         // surfaces.
         private const val BUBBLE_DIAMETER_DP = 56f
         private const val BUBBLE_HALO_DIAMETER_DP = 104f
-        private const val EDGE_INSET_DP = 16f
+        // Tightened from 16 dp to 4 dp (Hernat 2026-05-19) — the bubble
+        // now sits flush against the screen edge, matching Messenger /
+        // XRecorder chat-head conventions.
+        private const val EDGE_INSET_DP = 4f
+
+        // Trash hit-test radius (Hernat 2026-05-18). Bubble centre within
+        // this distance from the trash glyph centre = "drop to close"
+        // candidate. Generous because users typically aim toward the
+        // glyph centre but release a few dp short (Fitts's Law).
+        private const val TRASH_HIT_RADIUS_DP = 56f
+
+        // Trash window height (Hernat 2026-05-18 jank fix). Smaller than
+        // full-screen so the bubble drag area only overlaps this window
+        // during the final drop approach — reduces input-dispatch overhead
+        // that surfaced in the WindowManager alpha-rewrite warnings.
+        private const val TRASH_WINDOW_HEIGHT_DP = 200f
 
         // Story 1.10 — gap between the bubble's visible edge and the
         // FlashTooltip pointer. UX-DR4 8 dp spacing token.

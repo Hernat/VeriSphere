@@ -18,8 +18,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -86,7 +90,7 @@ fun ColumnScope.DetailPanelContent(
     onSourceClick: (SourceCitation) -> Unit,
 ) {
     VerdictRow(label = record.verdictLabel, headline = record.headline)
-    OcrSection(ocrText = record.ocrText)
+    OcrSection(extractedClaim = record.extractedClaim, rawOcrText = record.ocrText)
     SourcesSection(sources = record.sourceLinks, onSourceClick = onSourceClick)
     RegionalBiasRow(note = record.regionalBiasNote)
     FooterRow()
@@ -140,15 +144,59 @@ private fun VerdictRow(label: VerdictLabel, headline: String) {
 
 // ----- Section 2: OCR card --------------------------------------------
 
+/**
+ * Two-tier OCR section:
+ *  1. `Texte analysé` — the cleanly-extracted claim Gemini fact-checked,
+ *     filtered of social-media chrome (timestamps, like/share counts,
+ *     friend names). Verbatim from the image, source-language.
+ *  2. `Texte brut détecté` — collapsible (collapsed by default) full
+ *     verbatim OCR dump, preserved for anti-injection self-revealing
+ *     posture per PRD FR7 + FR8 + NFR8.
+ *
+ * Legacy fallback: when `extractedClaim` is blank (records persisted
+ * before the field landed, or Gemini omitted it), the section degrades
+ * to the original single-card layout showing `ocrText` under the legacy
+ * "Texte lu" title — preserves backward compatibility for the 500-entry
+ * history blob without a schema migration.
+ */
 @Composable
-private fun OcrSection(ocrText: String) {
+private fun OcrSection(extractedClaim: String, rawOcrText: String) {
+    val hasExtracted = extractedClaim.isNotBlank()
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            text = stringResource(R.string.detail_ocr_title),
+            text = stringResource(
+                if (hasExtracted) R.string.detail_extracted_claim_title else R.string.detail_ocr_title,
+            ),
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.semantics { heading() },
         )
-        OcrCard(text = ocrText)
+        OcrCard(text = if (hasExtracted) extractedClaim else rawOcrText)
+        if (hasExtracted && rawOcrText.isNotBlank() && rawOcrText.trim() != extractedClaim.trim()) {
+            RawOcrCollapsible(rawOcrText = rawOcrText)
+        }
+    }
+}
+
+@Composable
+private fun RawOcrCollapsible(rawOcrText: String) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(
+            onClick = { expanded = !expanded },
+            modifier = Modifier.testTag(TAG_RAW_OCR_TOGGLE),
+        ) {
+            Text(
+                text = stringResource(R.string.detail_raw_ocr_title) +
+                    " — " +
+                    stringResource(
+                        if (expanded) R.string.detail_raw_ocr_hide else R.string.detail_raw_ocr_show,
+                    ),
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+        if (expanded) {
+            OcrCard(text = rawOcrText)
+        }
     }
 }
 
@@ -334,6 +382,7 @@ private fun verdictEmojiFor(label: VerdictLabel): String = when (label) {
 /** Test tags for instrumented tests (see DetailPanelContentUiTest). */
 internal const val TAG_VERDICT_ROW = "vs_detail_verdict_row"
 internal const val TAG_OCR_CARD = "vs_detail_ocr_card"
+internal const val TAG_RAW_OCR_TOGGLE = "vs_detail_raw_ocr_toggle"
 internal const val TAG_SOURCES_ROW = "vs_detail_sources_row"
 internal const val TAG_SOURCES_UNAVAILABLE = "vs_detail_sources_unavailable"
 internal const val TAG_BIAS_ROW = "vs_detail_bias_row"

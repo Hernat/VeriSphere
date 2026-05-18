@@ -49,6 +49,7 @@ internal data class GeminiVerdictResponse(
     val contextLines: List<String> = emptyList(),
     val sources: List<SourceCitation> = emptyList(),
     val ocrText: String = "",
+    val extractedClaim: String = "",
     val regionalBiasNote: String? = null,
     val injectionDetected: Boolean = false,
 )
