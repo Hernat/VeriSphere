@@ -271,7 +271,7 @@ class MainActivityHistoryDetailTest {
          * the test free of resource-context plumbing; the literal lives
          * verbatim in `strings_verdict.xml` (line 35).
          */
-        private const val PANEL_OCR_HEADING = "What was read"
+        private const val PANEL_OCR_HEADING = "Texte lu"
 
         private const val EXPECTED_MATCHES_HISTORY_ONLY = 1
         private const val EXPECTED_MATCHES_PANEL_PLUS_HISTORY = 2

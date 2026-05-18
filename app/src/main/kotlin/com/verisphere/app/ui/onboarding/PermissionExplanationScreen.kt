@@ -91,10 +91,11 @@ fun isHostileOem(manufacturer: String): Boolean =
  * @param variant Which permission is denied — drives the title + body +
  *   CTA-label strings.
  * @param onPrimaryClick Invoked when the user taps the variant's primary
- *   CTA ("Allow overlay" / "Autoriser"). The host owns the Intent / launcher
- *   invocation.
- * @param onExit Invoked when the user taps the "Exit" `TextButton`. The
- *   host should `finish()` the activity.
+ *   CTA (`R.string.permission_allow_overlay` = `"Autoriser"` post Story 7.5
+ *   French baseline). The host owns the Intent / launcher invocation.
+ * @param onExit Invoked when the user taps the `R.string.permission_exit`
+ *   `TextButton` (`"Quitter"` post Story 7.5). The host should `finish()`
+ *   the activity.
  */
 @Composable
 fun PermissionExplanationScreen(

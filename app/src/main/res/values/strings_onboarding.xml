@@ -26,7 +26,8 @@
   present tense, second person, warm-tone, no exclamation marks, no
   apology framing.
 
-  TODO Story 7.5: add description="…" attributes for translation pass.
+  Story 7.5 C6 (AC #3) — V1 French baseline closed 2026-05-19; all strings
+  in this file were already French (Story 5.2 + 5.3 Hernat decisions).
 -->
 <resources>
 

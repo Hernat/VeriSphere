@@ -32,6 +32,16 @@
          Color.White verdict word rendered at ~1.04:1 — effectively invisible. -->
     <color name="vs_on_state_offline">#1F1F1F</color>
 
+    <!-- Story 7.5 C13 — on-colours for vs_verdict_doubtful + vs_verdict_non_verifiable
+         dark variants (Story 3.3 D1 + D2 closure). The amber #FDD663 dark-mode
+         doubtful background still needs DARK text for WCAG AA — same value
+         as light per UX Step 8 amber-is-theme-independent footnote. The grey
+         #9AA0A6 dark-mode background needs DARK text for ~6.5:1 contrast
+         (WCAG AAA) — the previously-hardcoded Color.White rendered at
+         ~2.55:1 (FAIL WCAG AA), the C13 fix. -->
+    <color name="vs_on_verdict_doubtful">#1F1F1F</color>
+    <color name="vs_on_verdict_non_verifiable">#1F1F1F</color>
+
     <!-- Privacy padlock -->
     <color name="vs_privacy_padlock">#81C995</color>
 

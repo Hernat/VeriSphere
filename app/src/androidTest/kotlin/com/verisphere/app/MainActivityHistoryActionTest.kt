@@ -86,7 +86,7 @@ class MainActivityHistoryActionTest {
         // → 2 matches expected.
         sendPanelIntent(PRIMARY_ID)
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("What was read").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Texte lu").assertIsDisplayed()
         composeTestRule
             .onAllNodesWithText(fixtureHeadlineFor(PRIMARY_ID))
             .assertCountEquals(EXPECTED_MATCHES_PANEL_PLUS_HISTORY)
@@ -100,7 +100,7 @@ class MainActivityHistoryActionTest {
         // Step 3: panel is dismissed — only the LazyColumn row renders
         // the headline. The "What was read" panel section heading is
         // gone. AC #2 satisfied.
-        composeTestRule.onNodeWithText("What was read").assertDoesNotExist()
+        composeTestRule.onNodeWithText("Texte lu").assertDoesNotExist()
         composeTestRule
             .onAllNodesWithText(fixtureHeadlineFor(PRIMARY_ID))
             .assertCountEquals(EXPECTED_MATCHES_HISTORY_ONLY)
@@ -126,7 +126,7 @@ class MainActivityHistoryActionTest {
             .assertCountEquals(EXPECTED_MATCHES_HISTORY_ONLY)
         // The panel section heading must not exist (no panel was ever
         // mounted).
-        composeTestRule.onNodeWithText("What was read").assertDoesNotExist()
+        composeTestRule.onNodeWithText("Texte lu").assertDoesNotExist()
     }
 
     // ─── Fixture helpers ─────────────────────────────────────────────

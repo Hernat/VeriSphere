@@ -19,52 +19,64 @@
     <string name="flash_verdict_non_verifiable">NON-VERIFIABLE</string>
 
     <!-- Story 1.10 — Verdict-state contentDescriptions for TalkBack (UX-DR18, NFR12).
-         Reused by Story 2.3 DetailPanelContent for the verdict-row merged-semantics announcement. -->
-    <string name="bubble_verdict_true_content_description">Verdict: true</string>
-    <string name="bubble_verdict_false_content_description">Verdict: false</string>
-    <string name="bubble_verdict_doubtful_content_description">Verdict: doubtful</string>
-    <string name="bubble_verdict_non_verifiable_content_description">Verdict: non-verifiable</string>
+         Reused by Story 2.3 DetailPanelContent for the verdict-row merged-semantics announcement.
+         Story 7.5 AC #3 — French baseline. -->
+    <string name="bubble_verdict_true_content_description">Verdict : vrai</string>
+    <string name="bubble_verdict_false_content_description">Verdict : faux</string>
+    <string name="bubble_verdict_doubtful_content_description">Verdict : douteux</string>
+    <string name="bubble_verdict_non_verifiable_content_description">Verdict : non-vérifiable</string>
 
     <!-- Story 2.4 — FlashTooltip clickable a11y hint (UX-DR18, NFR12).
          Drives TalkBack's "Double tap to {label}" announcement on the
          FlashTooltip's clickable Surface (Role.Button). -->
-    <string name="tooltip_expand_action_label">Expand detail</string>
+    <string name="tooltip_expand_action_label">Voir le détail</string>
 
     <!-- Story 2.3 — Detail panel section titles + footer (UX-DR17, UX spec § Component Strategy
-         AnchoredDetailPanel content order). Verbatim copy; do not reword. -->
-    <string name="detail_ocr_title">What was read</string>
+         AnchoredDetailPanel content order). Story 7.5 AC #3 — French baseline.
+         detail_built_with_gemini stays English per FR14 attribution invariant
+         (Story 7.4 MS7 phrase pin per Google Gemini API attribution guidelines). -->
+    <string name="detail_ocr_title">Texte lu</string>
     <string name="detail_sources_title">Sources</string>
-    <string name="detail_sources_unavailable">No corroborating sources found.</string>
-    <string name="detail_padlock_copy">No one sees this. Just between us.</string>
+    <string name="detail_sources_unavailable">Aucune source corroborante trouvée.</string>
+    <string name="detail_padlock_copy">Personne d\'autre ne le voit. C\'est entre toi et nous.</string>
     <string name="detail_built_with_gemini">Built with Gemini</string>
     <!-- Reserved for future a11y wiring (V2 i18n pass owns the prefix-binding). -->
-    <string name="detail_regional_bias_a11y_prefix" tools:ignore="UnusedResources">Regional context:</string>
+    <string name="detail_regional_bias_a11y_prefix" tools:ignore="UnusedResources">Contexte régional :</string>
 
     <!-- Story 3.3 — FailureState flash word + headline strings (UX-DR15, UX-DR17,
          UX spec lines 673–680). Word strings are uppercase per UX spec; headlines
-         are warm-tone full sentences (UX spec line 782 "prefer Try again over
-         Retry or Failed"). Five FailureState variants: Offline / Timeout /
-         DailyLimit / QuotaExhausted / PossibleInjection. The silent-bucket
-         failures (PermissionDenied, CaptureFailed, HttpError, MalformedResponse)
-         have NO strings — the bubble returns silently to Idle. -->
-    <string name="flash_offline_word">OFFLINE</string>
-    <string name="flash_offline_headline">Try again when you\'re online</string>
-    <string name="flash_timeout_word">TIMEOUT</string>
-    <string name="flash_timeout_headline">Try again</string>
-    <string name="flash_daily_limit_word">DAILY LIMIT</string>
-    <string name="flash_daily_limit_headline">Daily limit reached. Try again tomorrow.</string>
-    <string name="flash_quota_exhausted_word">UNAVAILABLE</string>
-    <string name="flash_quota_exhausted_headline">Service temporarily unavailable</string>
-    <string name="flash_possible_injection_word">POSSIBLE INJECTION</string>
-    <string name="flash_possible_injection_headline">See OCR text</string>
+         are warm-tone full sentences (UX spec line 782 — "prefer Try again over
+         Retry or Failed"). Six FailureState variants: Offline / Timeout /
+         DailyLimit / QuotaExhausted / PossibleInjection / NotFound (Story 7.5 C1).
+         The silent-bucket failures (PermissionDenied, CaptureFailed, HttpError,
+         MalformedResponse) have NO strings — the bubble returns silently to Idle.
+         Story 7.5 AC #3 — French baseline. -->
+    <string name="flash_offline_word">HORS LIGNE</string>
+    <string name="flash_offline_headline">Réessaie une fois en ligne.</string>
+    <string name="flash_timeout_word">DÉLAI DÉPASSÉ</string>
+    <string name="flash_timeout_headline">Réessaie.</string>
+    <string name="flash_daily_limit_word">LIMITE QUOTIDIENNE</string>
+    <string name="flash_daily_limit_headline">Limite quotidienne atteinte. Réessaie demain.</string>
+    <string name="flash_quota_exhausted_word">INDISPONIBLE</string>
+    <string name="flash_quota_exhausted_headline">Service temporairement indisponible.</string>
+    <string name="flash_possible_injection_word">INJECTION POSSIBLE</string>
+    <string name="flash_possible_injection_headline">Voir le texte lu.</string>
 
-    <!-- Story 3.3 — FailureState contentDescriptions for TalkBack on the bubble
-         surface (NFR12, UX-DR18). Pattern matches "Verdict: {label}" from the
-         existing verdict contentDescriptions; here we use "State: {label}". -->
-    <string name="bubble_state_offline_content_description">State: offline</string>
-    <string name="bubble_state_timeout_content_description">State: timeout</string>
-    <string name="bubble_state_daily_limit_content_description">State: daily limit reached</string>
-    <string name="bubble_state_quota_exhausted_content_description">State: service unavailable</string>
-    <string name="bubble_state_possible_injection_content_description">State: possible injection detected</string>
+    <!-- Story 7.5 C1 — FailureState.NotFound flash variant for history-record
+         eviction / stale-tap race (deferred-work L247). French baseline per
+         Story 7.5 AC #3 (V1 language decision = French). -->
+    <string name="flash_not_found_word">INTROUVABLE</string>
+    <string name="flash_not_found_headline">Ce verdict n\'est plus dans l\'historique.</string>
+
+    <!-- Story 3.3 + Story 7.5 C1 — FailureState contentDescriptions for TalkBack
+         on the bubble surface (NFR12, UX-DR18). Pattern matches "Verdict :
+         {label}" from the existing verdict contentDescriptions; here we use
+         "État : {label}". Story 7.5 AC #3 — French baseline. -->
+    <string name="bubble_state_offline_content_description">État : hors ligne</string>
+    <string name="bubble_state_timeout_content_description">État : délai dépassé</string>
+    <string name="bubble_state_daily_limit_content_description">État : limite quotidienne atteinte</string>
+    <string name="bubble_state_quota_exhausted_content_description">État : service indisponible</string>
+    <string name="bubble_state_possible_injection_content_description">État : injection possible détectée</string>
+    <string name="bubble_state_not_found_content_description">État : introuvable</string>
 
 </resources>

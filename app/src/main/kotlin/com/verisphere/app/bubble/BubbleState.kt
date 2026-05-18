@@ -29,15 +29,16 @@ import com.verisphere.app.storage.SessionRecord
  *    it. After 5–8 s the [Verdict.tooltipFaded] flag flips via a second
  *    internal timer; the bubble retains its colour until the next
  *    [BubbleEvent.BackToIdle].
- *  - [FailureState.*] — Story 3.3 failure-flash variants. Five concrete
- *    variants: [FailureState.Offline] / [FailureState.Timeout] (share the
- *    `vs_state_offline` palette token), [FailureState.DailyLimit] /
- *    [FailureState.QuotaExhausted] (share the neutral
- *    `vs_verdict_non_verifiable` grey), [FailureState.PossibleInjection]
- *    (carries the persisted [SessionRecord] and uses the doubtful amber
- *    palette — only failure variant for which a bubble-tap opens the
- *    detail panel). Each variant carries its own `tooltipFaded` flag and
- *    shares the verdict-tooltip auto-fade behaviour (UX-DR6).
+ *  - [FailureState.*] — Story 3.3 failure-flash variants + Story 7.5 C1
+ *    extension. Six concrete variants: [FailureState.Offline] /
+ *    [FailureState.Timeout] (share the `vs_state_offline` palette token),
+ *    [FailureState.DailyLimit] / [FailureState.QuotaExhausted] /
+ *    [FailureState.NotFound] (share the neutral `vs_verdict_non_verifiable`
+ *    grey), [FailureState.PossibleInjection] (carries the persisted
+ *    [SessionRecord] and uses the doubtful amber palette — only failure
+ *    variant for which a bubble-tap opens the detail panel). Each variant
+ *    carries its own `tooltipFaded` flag and shares the verdict-tooltip
+ *    auto-fade behaviour (UX-DR6).
  *
  * **Silent-bucket failures** ([com.verisphere.app.gemini.VerificationOutcome.Failure.PermissionDenied],
  * [com.verisphere.app.gemini.VerificationOutcome.Failure.CaptureFailed],
@@ -178,5 +179,33 @@ sealed interface BubbleState {
             val record: SessionRecord,
             val tooltipFaded: Boolean = false,
         ) : FailureState
+
+        /**
+         * Story 7.5 C1 — history-record-not-found surface for the FIFO
+         * eviction / stale-tap-race edge case (deferred-work L247).
+         *
+         * Fired when [com.verisphere.app.MainActivity.tryOpenPendingDetailPanel]
+         * OR [com.verisphere.app.MainActivity.openHistoryRecord] resolves
+         * `historyRepository.getById(pending)` to `null` — the record was
+         * dropped between Verdict emission and panel mount (FIFO eviction
+         * at the 500-entry cap per architecture D1.3, OR a stale tap whose
+         * Verdict-state record was overwritten by a faster fresh capture).
+         *
+         * Tooltip renders `INTROUVABLE` + `Ce verdict n'est plus dans
+         * l'historique.` on the neutral `vs_verdict_non_verifiable` grey
+         * (same palette as [DailyLimit] / [QuotaExhausted] per UX-DR15 —
+         * "not found" is benign, not hostile). Tap on bubble is a **no-op**
+         * (carries no [SessionRecord] — the record is, by definition, gone).
+         *
+         * **Cross-process dispatch** — unlike the other 5 [FailureState]
+         * variants which are mapped from `VerificationOutcome.Failure` by
+         * [com.verisphere.app.bubble.BubbleStateMachine.mapFailureToState],
+         * [NotFound] arrives via a dedicated [com.verisphere.app.bubble.BubbleEvent.HistoryRecordNotFound]
+         * event triggered by the Activity-side null branches through the
+         * new `BubbleOverlayService.ACTION_NOTIFY_HISTORY_NOT_FOUND` Intent
+         * action (architecture D4.2 lifecycle-owner contract preserved —
+         * `BubbleStateMachine` stays Service-private).
+         */
+        data class NotFound(val tooltipFaded: Boolean = false) : FailureState
     }
 }

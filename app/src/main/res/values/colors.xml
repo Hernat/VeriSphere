@@ -30,6 +30,16 @@
          vs_state_offline=#E8E8E8 dark surface. -->
     <color name="vs_on_state_offline">#FFFFFF</color>
 
+    <!-- Story 7.5 C13 — on-colours for the 2 remaining problematic
+         tooltip-headline backgrounds (Story 3.3 D1 + D2 closure). The
+         vs_on_state_offline naming convention (per Story 3.3 patch P2) is
+         extended here to vs_verdict_doubtful + vs_verdict_non_verifiable.
+         Light variants: dark text on amber doubtful (#F9AB00 with white
+         fails WCAG AA per UX Step 8 footnote); white text on grey
+         #5F6368 gives ~7:1 (WCAG AAA). -->
+    <color name="vs_on_verdict_doubtful">#1F1F1F</color>
+    <color name="vs_on_verdict_non_verifiable">#FFFFFF</color>
+
     <!-- Privacy padlock — deliberately distinct from vs_verdict_true (UX Step 8) -->
     <color name="vs_privacy_padlock">#34A853</color>
 

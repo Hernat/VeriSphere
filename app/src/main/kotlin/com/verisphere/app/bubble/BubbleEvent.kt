@@ -24,6 +24,11 @@ import com.verisphere.app.gemini.VerificationOutcome
  *  - [BackToIdle] — explicit "user gesture in source app" or "press
  *    cancelled before 1 s" reset event. Drives the only path back to
  *    [BubbleState.Idle] from [BubbleState.Pressing] / [BubbleState.Verdict].
+ *  - [HistoryRecordNotFound] — Story 7.5 C1 cross-process trigger fired
+ *    when MainActivity's null-getById branches surface the FIFO eviction /
+ *    stale-tap-race edge case. Reducer transitions [BubbleState.Idle] →
+ *    [BubbleState.FailureState.NotFound]; every other state is a no-op
+ *    (a stale signal cannot rewrite a transient state).
  */
 sealed interface BubbleEvent {
 
@@ -113,4 +118,29 @@ sealed interface BubbleEvent {
      * review patch P1).
      */
     data object BackToIdle : BubbleEvent
+
+    /**
+     * Story 7.5 C1 — fired EXCLUSIVELY by [com.verisphere.app.bubble.BubbleOverlayService.onStartCommand]
+     * when an [com.verisphere.app.bubble.BubbleOverlayService.ACTION_NOTIFY_HISTORY_NOT_FOUND]
+     * Intent arrives. The action is started by [com.verisphere.app.MainActivity]'s
+     * `tryOpenPendingDetailPanel` + `openHistoryRecord` null-getById
+     * branches (FIFO eviction at architecture D1.3's 500-entry cap, OR
+     * stale-tap race between Verdict emission and panel mount).
+     *
+     * NEVER emit this event from a Composable or from inside the bubble
+     * service itself — the dispatch contract is "Activity-side null branch
+     * → Intent action → service onStartCommand → state machine". The
+     * Composable-side gesture handlers + the service-side capture pipeline
+     * have no business signalling NotFound.
+     *
+     * Reducer maps:
+     *  - [BubbleState.Idle] → [BubbleState.FailureState.NotFound] (the
+     *    common case — bubble had returned to Idle after the user tapped
+     *    the verdict bubble to open the panel, per Story 2.4 AC #4
+     *    amendment shipped in Story 7.4 C2);
+     *  - any other state → no-op (a stale signal cannot rewrite a
+     *    transient `Pressing` / `Capturing` / `Thinking` / `Verdict` /
+     *    in-progress `FailureState.*` state).
+     */
+    data object HistoryRecordNotFound : BubbleEvent
 }

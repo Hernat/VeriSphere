@@ -14,7 +14,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
@@ -376,6 +375,16 @@ class BubbleOverlayService :
         // deliveries because the AccessibilityService owns its own
         // permission lifecycle (granted via Settings, persistent across
         // reboots).
+
+        // Story 7.5 C1 — cross-process NotFound dispatch from MainActivity's
+        // null-getById branches (FIFO eviction / stale-tap race). The
+        // Activity-side null path starts the service with this action
+        // (fire-and-forget; no extras). Reducer transitions Idle → NotFound
+        // (other states no-op). Architecture D4.2 lifecycle-owner contract
+        // preserved — BubbleStateMachine stays Service-private.
+        if (intent?.action == ACTION_NOTIFY_HISTORY_NOT_FOUND) {
+            bubbleStateMachine.onEvent(BubbleEvent.HistoryRecordNotFound)
+        }
 
         // START_STICKY: Android auto-restarts the service after process
         // death (NFR15). The intent is null on restart — that is fine,
@@ -1064,6 +1073,7 @@ class BubbleOverlayService :
             is BubbleState.FailureState.DailyLimit -> failure.tooltipFaded
             is BubbleState.FailureState.QuotaExhausted -> failure.tooltipFaded
             is BubbleState.FailureState.PossibleInjection -> failure.tooltipFaded
+            is BubbleState.FailureState.NotFound -> failure.tooltipFaded
         }
 
         // Story 7.4 MS4 — same WRAP_CONTENT-sized window pattern as
@@ -1504,32 +1514,36 @@ class BubbleOverlayService :
     }
 
     /**
-     * Returns the current display size in pixels.
-     *
-     * Uses [WindowManager.getCurrentWindowMetrics] on API 30+ (the
-     * documented modern path) and falls back to
-     * [android.view.Display.getRealMetrics] on API 26–29 — `minSdk = 26`
-     * so we cannot drop the legacy branch.
+     * Returns the current display size in pixels via
+     * [WindowManager.getCurrentWindowMetrics] (the documented modern path
+     * on API 30+; `minSdk = 30` makes the API 26–29 fallback unreachable
+     * so the legacy `Display.getRealMetrics` branch was removed in
+     * Story 7.5 / C9).
      */
-    @Suppress("DEPRECATION")
     private fun currentWindowSizePx(): Pair<Int, Int> {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val bounds = windowManager.currentWindowMetrics.bounds
-            bounds.width() to bounds.height()
-        } else {
-            val metrics = DisplayMetrics()
-            windowManager.defaultDisplay.getRealMetrics(metrics)
-            metrics.widthPixels to metrics.heightPixels
-        }
+        val bounds = windowManager.currentWindowMetrics.bounds
+        return bounds.width() to bounds.height()
     }
 
-    private companion object {
-        // Story 1.8.5 (Sprint Change 2026-05-07): the public Intent
-        // action / extra constants from Story 1.8 (ACTION_REQUEST_TOKEN,
+    companion object {
+        // Story 1.8.5 (Sprint Change 2026-05-07): the Story 1.8 public
+        // Intent action / extra constants (ACTION_REQUEST_TOKEN,
         // ACTION_DELIVER_TOKEN, EXTRA_RESULT_CODE, EXTRA_RESULT_DATA)
-        // are deleted — the MediaProjection Intent dance is gone.
-        // companion object reverted to private since no external caller
-        // needs its constants.
+        // were deleted — the MediaProjection Intent dance is gone.
+        // Story 7.5 C1 re-opens the companion (default visibility) so a
+        // single new external constant (ACTION_NOTIFY_HISTORY_NOT_FOUND)
+        // can be referenced by MainActivity's null-getById branches;
+        // every other constant stays explicitly `private const val`.
+
+        /**
+         * Story 7.5 C1 — Intent action fired by [com.verisphere.app.MainActivity]'s
+         * `tryOpenPendingDetailPanel` + `openHistoryRecord` null-getById
+         * branches (FIFO eviction / stale-tap race). The action is the
+         * full payload; no extras. [onStartCommand] dispatches
+         * [BubbleEvent.HistoryRecordNotFound] into the bubble state machine.
+         */
+        internal const val ACTION_NOTIFY_HISTORY_NOT_FOUND =
+            "com.verisphere.app.bubble.action.NOTIFY_HISTORY_NOT_FOUND"
 
         private val TAG = tag("BubbleOverlayService")
         private const val NOTIFICATION_ID = 1

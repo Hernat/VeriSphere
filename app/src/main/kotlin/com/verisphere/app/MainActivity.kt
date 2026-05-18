@@ -456,9 +456,27 @@ class MainActivity : ComponentActivity() {
             if (record != null) {
                 detailRecordToShow = record
             } else {
-                // FIFO eviction edge case (record dropped between
-                // Verdict emission and tap). Silent log; panel does
-                // not open.
+                // Story 7.5 C1 — surface the FIFO eviction edge case via
+                // the bubble's FailureState.NotFound flash variant (was
+                // silent Log.w in Stories 2.4–7.4). The Log.w is kept for
+                // diagnostic clarity (privacy-safe — only the redacted
+                // session-id is logged per architecture L505).
+                //
+                // Story 7.5 code-review P1 — `lifecycleScope` survives
+                // until onDestroy; the coroutine can resume from a STOPPED
+                // / onPause state where Android 12+ (API 31+) throws
+                // `ForegroundServiceStartNotAllowedException` (subclass
+                // of IllegalStateException). Wrap defensively so the
+                // backgrounded-app race silently drops the NotFound flash
+                // rather than crashing MainActivity.
+                try {
+                    startService(
+                        Intent(this@MainActivity, BubbleOverlayService::class.java)
+                            .setAction(BubbleOverlayService.ACTION_NOTIFY_HISTORY_NOT_FOUND),
+                    )
+                } catch (e: IllegalStateException) {
+                    Log.w(TAG, "Cannot dispatch NotFound flash — app backgrounded", e)
+                }
                 Log.w(TAG, "getById($pending) returned null — record evicted or never persisted")
             }
         }
@@ -492,20 +510,44 @@ class MainActivity : ComponentActivity() {
      *
      * **Null fall-through** — `getById` returns `null` on FIFO eviction
      * (architecture D1.3, 500-entry cap) or process-restart edge where
-     * the cache is mid-load. Silent `Log.w` + no panel mount, mirroring
-     * the Story 2.4 [tryOpenPendingDetailPanel] precedent. The V1.x
-     * "NOT FOUND flash" variant tracked in `deferred-work.md` C1 is out
-     * of Story 4.4 scope.
+     * the cache is mid-load. Story 7.5 wires this null branch through
+     * [BubbleOverlayService.ACTION_NOTIFY_HISTORY_NOT_FOUND] →
+     * [com.verisphere.app.bubble.BubbleEvent.HistoryRecordNotFound] →
+     * [com.verisphere.app.bubble.BubbleState.FailureState.NotFound] flash
+     * variant (was silent Log.w pre-Story-7.5, mirroring the Story 2.4
+     * [tryOpenPendingDetailPanel] precedent which is now also wired).
      */
     private fun openHistoryRecord(recordId: String) {
+        // Story 7.5 code-review P2 — match the `tryOpenPendingDetailPanel`
+        // gate posture: skip the NotFound dispatch if overlay+accessibility
+        // gates are closed (overlay revoked / accessibility disabled
+        // mid-session). Without this guard, `startService` would boot the
+        // bubble service into degraded mode (no visible bubble) with the
+        // user seeing only the foreground notification and no flash
+        // feedback (Edge Case Hunter #6).
+        val testBypass = BuildConfig.DEBUG && bypassGatesForTest
+        val gatesOpen = testBypass || (overlayGranted && accessibilityServiceEnabled)
         val container = (application as VeriSphereApplication).container
         lifecycleScope.launch {
             val record = container.historyRepository.getById(recordId)
             if (record != null) {
                 detailBubbleAnchorXPx = 0
                 detailRecordToShow = record
-            } else {
+            } else if (gatesOpen) {
+                // Story 7.5 code-review P1 — same defensive try/catch as
+                // `tryOpenPendingDetailPanel` for the backgrounded-app race
+                // (ForegroundServiceStartNotAllowedException on API 31+).
+                try {
+                    startService(
+                        Intent(this@MainActivity, BubbleOverlayService::class.java)
+                            .setAction(BubbleOverlayService.ACTION_NOTIFY_HISTORY_NOT_FOUND),
+                    )
+                } catch (e: IllegalStateException) {
+                    Log.w(TAG, "Cannot dispatch NotFound flash — app backgrounded", e)
+                }
                 Log.w(TAG, "openHistoryRecord($recordId) returned null — record evicted")
+            } else {
+                Log.w(TAG, "openHistoryRecord($recordId) returned null — gates closed, skipping NotFound dispatch")
             }
         }
     }

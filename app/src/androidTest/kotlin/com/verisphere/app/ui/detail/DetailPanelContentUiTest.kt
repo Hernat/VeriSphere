@@ -289,13 +289,15 @@ private fun fixtureRecord(
 
 // Verdict word and copy strings — kept literal here so the assertions are
 // self-contained (no R.string lookup required from an Activity rule).
-// Translation-aware tests are deferred to the localisation pass per
-// deferred-work — same posture as Story 2.1's UI tests.
+// Story 7.5 C6 — V1 French baseline; verdict word stays English-as-
+// international-convention per UX-DR17 + Hernat decision 2026-05-19;
+// BUILT_WITH_GEMINI stays English per FR14 attribution invariant
+// (Story 7.4 MS7 phrase pin per Google Gemini API attribution guidelines).
 private const val VERDICT_WORD_TRUE = "TRUE"
-private const val OCR_TITLE = "What was read"
+private const val OCR_TITLE = "Texte lu"
 private const val SOURCES_TITLE = "Sources"
-private const val SOURCES_UNAVAILABLE_MSG = "No corroborating sources found."
-private const val PADLOCK_COPY = "No one sees this. Just between us."
+private const val SOURCES_UNAVAILABLE_MSG = "Aucune source corroborante trouvée."
+private const val PADLOCK_COPY = "Personne d'autre ne le voit. C'est entre toi et nous."
 private const val BUILT_WITH_GEMINI = "Built with Gemini"
 
 // Story 2.1 chip label format: `domain · YYYY-MM`. SAMPLE_BBC's URL is

@@ -102,7 +102,7 @@ fun FlashTooltip(
 
     val backgroundColor = colorResource(verdictBackgroundFor(verdictLabel))
     val verdictTextColor = verdictTextColorFor(verdictLabel)
-    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    val headlineColor = colorResource(verdictHeadlineColorFor(verdictLabel))
     val textAlpha by animateFloatAsState(
         targetValue = if (textFaded) 0f else 1f,
         animationSpec = tween(durationMillis = TEXT_FADE_MS),
@@ -168,7 +168,7 @@ fun FlashTooltip(
                 Text(
                     text = headline,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = onSurfaceVariant,
+                    color = headlineColor,
                 )
             }
         }
@@ -239,20 +239,60 @@ internal fun verdictBackgroundFor(label: VerdictLabel): Int = when (label) {
 }
 
 /**
+ * Story 7.5 C13 — per-verdict-background `onColor` semantic token for the
+ * `bodyMedium` headline (UX-DR2 line 410 — 14 sp body). Mirrors the
+ * existing Story 3.3 patch P2 `vs_on_state_offline` precedent.
+ *
+ * **Why per-background tokens** — `MaterialTheme.colorScheme.onSurfaceVariant`
+ * is tuned for the M3 `surfaceVariant`, not for our custom verdict palette.
+ * On `vs_verdict_non_verifiable=#9AA0A6` in dark mode, `onSurfaceVariant`
+ * resolved to white ≈ 2.55:1 (FAIL WCAG AA). The per-background tokens
+ * pin the right contrast for each background per UX Step 8.
+ *
+ * Routing:
+ *  - `TRUE` / `FALSE` → `vs_on_state_offline` (white in light / dark in dark)
+ *    matches the verdict-word colour convention for white-on-coloured.
+ *  - `DOUBTFUL` → `vs_on_verdict_doubtful` (dark text on amber).
+ *  - `NON_VERIFIABLE` → `vs_on_verdict_non_verifiable` (white in light,
+ *    dark in dark — the C13 fix).
+ */
+@ColorRes
+internal fun verdictHeadlineColorFor(label: VerdictLabel): Int = when (label) {
+    VerdictLabel.TRUE -> R.color.vs_on_state_offline
+    VerdictLabel.FALSE -> R.color.vs_on_state_offline
+    VerdictLabel.DOUBTFUL -> R.color.vs_on_verdict_doubtful
+    VerdictLabel.NON_VERIFIABLE -> R.color.vs_on_verdict_non_verifiable
+}
+
+/**
  * UX Step 8 footnote — the amber `#F9AB00` background fails WCAG AA
  * against white text. DOUBTFUL therefore renders the verdict word in
  * dark text; every other verdict uses white on coloured background.
  *
- * The DOUBTFUL text colour is theme-independent (the amber background
- * is the same RGB in light and dark themes per UX Step 8), so we use
- * a hard-coded `#1F1F1F` rather than `MaterialTheme.colorScheme.onSurface`
- * which would invert under dark theme.
+ * Routing (Story 7.5 code-review P3 — extends C13 WCAG AA fix from the
+ * headline-only scope to the verdict-WORD scope too; closes the
+ * asymmetric-fix gap caught by Edge Case Hunter #2 + #16):
+ *  - `TRUE` / `FALSE` → `vs_on_state_offline` (white in light / dark in
+ *    dark — same theme-aware token as the headline; reuses the Story 3.3
+ *    patch P2 precedent).
+ *  - `DOUBTFUL` → `vs_on_verdict_doubtful` (dark text on amber, both
+ *    themes — the amber background is theme-independent per UX Step 8).
+ *  - `NON_VERIFIABLE` → `vs_on_verdict_non_verifiable` (the C13 dark-mode
+ *    WCAG AA fix: dark text on `#9AA0A6` light-grey gives ~6.5:1 vs the
+ *    previously-hardcoded `Color.White` at ~2.55:1 which failed AA).
+ *
+ * Exhaustive per-label table matches the `verdictHeadlineColorFor` /
+ * `verdictBackgroundFor` convention — `else -> Color.White` legacy
+ * else-branch removed so future verdict-label additions surface at
+ * compile-time exhaustive-`when` error (CDN #2 second-order benefit).
  */
 @Composable
 @ReadOnlyComposable
 private fun verdictTextColorFor(label: VerdictLabel): Color = when (label) {
-    VerdictLabel.DOUBTFUL -> Color(VS_DOUBTFUL_TEXT_COLOR_ARGB)
-    else -> Color.White
+    VerdictLabel.TRUE -> colorResource(R.color.vs_on_state_offline)
+    VerdictLabel.FALSE -> colorResource(R.color.vs_on_state_offline)
+    VerdictLabel.DOUBTFUL -> colorResource(R.color.vs_on_verdict_doubtful)
+    VerdictLabel.NON_VERIFIABLE -> colorResource(R.color.vs_on_verdict_non_verifiable)
 }
 
 private const val MAX_WIDTH_FRACTION = 0.75f
@@ -282,6 +322,7 @@ internal fun failureFlashWordResFor(failure: BubbleState.FailureState): Int = wh
     is BubbleState.FailureState.DailyLimit -> R.string.flash_daily_limit_word
     is BubbleState.FailureState.QuotaExhausted -> R.string.flash_quota_exhausted_word
     is BubbleState.FailureState.PossibleInjection -> R.string.flash_possible_injection_word
+    is BubbleState.FailureState.NotFound -> R.string.flash_not_found_word
 }
 
 /**
@@ -296,6 +337,7 @@ internal fun failureFlashHeadlineResFor(failure: BubbleState.FailureState): Int 
     is BubbleState.FailureState.DailyLimit -> R.string.flash_daily_limit_headline
     is BubbleState.FailureState.QuotaExhausted -> R.string.flash_quota_exhausted_headline
     is BubbleState.FailureState.PossibleInjection -> R.string.flash_possible_injection_headline
+    is BubbleState.FailureState.NotFound -> R.string.flash_not_found_headline
 }
 
 /**
@@ -312,6 +354,32 @@ internal fun failureBackgroundFor(failure: BubbleState.FailureState): Int = when
     is BubbleState.FailureState.DailyLimit -> R.color.vs_verdict_non_verifiable
     is BubbleState.FailureState.QuotaExhausted -> R.color.vs_verdict_non_verifiable
     is BubbleState.FailureState.PossibleInjection -> R.color.vs_verdict_doubtful
+    is BubbleState.FailureState.NotFound -> R.color.vs_verdict_non_verifiable
+}
+
+/**
+ * Story 7.5 C13 — per-failure-background `onColor` semantic token for the
+ * `bodyMedium` headline. Sibling to [verdictHeadlineColorFor]; closes the
+ * Story 3.3 D1 + D2 deferred-work entries (white-on-grey contrast bug in
+ * dark mode for DailyLimit / QuotaExhausted).
+ *
+ * Routing matches the [failureBackgroundFor] background → on-colour pairing:
+ *  - `Offline` / `Timeout` → `vs_on_state_offline` (existing Story 3.3 P2 pair)
+ *  - `DailyLimit` / `QuotaExhausted` → `vs_on_verdict_non_verifiable` (NEW
+ *    Story 7.5 C13 pair).
+ *  - `PossibleInjection` → `vs_on_verdict_doubtful` (NEW Story 7.5 C13 pair).
+ *
+ * The `NotFound` variant added in Story 7.5 C1 (Task 3.10) extends this
+ * table with a `vs_on_verdict_non_verifiable` branch matching DailyLimit.
+ */
+@ColorRes
+internal fun failureHeadlineColorFor(failure: BubbleState.FailureState): Int = when (failure) {
+    is BubbleState.FailureState.Offline -> R.color.vs_on_state_offline
+    is BubbleState.FailureState.Timeout -> R.color.vs_on_state_offline
+    is BubbleState.FailureState.DailyLimit -> R.color.vs_on_verdict_non_verifiable
+    is BubbleState.FailureState.QuotaExhausted -> R.color.vs_on_verdict_non_verifiable
+    is BubbleState.FailureState.PossibleInjection -> R.color.vs_on_verdict_doubtful
+    is BubbleState.FailureState.NotFound -> R.color.vs_on_verdict_non_verifiable
 }
 
 /**
@@ -325,6 +393,7 @@ internal fun failureContentDescriptionFor(failure: BubbleState.FailureState): In
     is BubbleState.FailureState.DailyLimit -> R.string.bubble_state_daily_limit_content_description
     is BubbleState.FailureState.QuotaExhausted -> R.string.bubble_state_quota_exhausted_content_description
     is BubbleState.FailureState.PossibleInjection -> R.string.bubble_state_possible_injection_content_description
+    is BubbleState.FailureState.NotFound -> R.string.bubble_state_not_found_content_description
 }
 
 /**
@@ -348,7 +417,14 @@ private fun failureFlashTextColorFor(failure: BubbleState.FailureState): Color =
     is BubbleState.FailureState.PossibleInjection -> Color(VS_DOUBTFUL_TEXT_COLOR_ARGB)
     is BubbleState.FailureState.Offline,
     is BubbleState.FailureState.Timeout -> colorResource(R.color.vs_on_state_offline)
-    else -> Color.White
+    // Story 7.5 C13 — DailyLimit / QuotaExhausted / NotFound share the
+    // neutral grey vs_verdict_non_verifiable background; their verdict
+    // word uses the matching `vs_on_verdict_non_verifiable` token (white
+    // in light, dark in dark) instead of the previously-hardcoded
+    // Color.White which failed WCAG AA in dark mode (Story 3.3 D2 / C13).
+    is BubbleState.FailureState.DailyLimit,
+    is BubbleState.FailureState.QuotaExhausted,
+    is BubbleState.FailureState.NotFound -> colorResource(R.color.vs_on_verdict_non_verifiable)
 }
 
 /**
@@ -409,7 +485,7 @@ fun FailureFlashTooltip(
 
     val backgroundColor = colorResource(failureBackgroundFor(failure))
     val wordColor = failureFlashTextColorFor(failure)
-    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    val headlineColor = colorResource(failureHeadlineColorFor(failure))
     val textAlpha by animateFloatAsState(
         targetValue = if (textFaded) 0f else 1f,
         animationSpec = tween(durationMillis = TEXT_FADE_MS),
@@ -487,7 +563,7 @@ fun FailureFlashTooltip(
                 Text(
                     text = headline,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = onSurfaceVariant,
+                    color = headlineColor,
                 )
             }
         }
@@ -828,6 +904,40 @@ private fun FailureFlashTooltipPossibleInjectionDarkPreview() {
             failure = BubbleState.FailureState.PossibleInjection(record = previewInjectionRecord()),
             textFaded = false,
             pointerDirection = PointerDirection.LEFT,
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+        )
+    }
+}
+
+// Story 7.5 C1 — NotFound previews mirror the 5 existing FailureState
+// preview pairs (no record arg needed; the NotFound variant carries no
+// SessionRecord by design).
+
+@Preview(showBackground = true, name = "Failure - NOT FOUND - Light")
+@Composable
+private fun FailureFlashTooltipNotFoundLightPreview() {
+    VeriSphereTheme {
+        FailureFlashTooltip(
+            failure = BubbleState.FailureState.NotFound(),
+            textFaded = false,
+            pointerDirection = PointerDirection.LEFT,
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+        )
+    }
+}
+
+@Preview(
+    showBackground = true,
+    name = "Failure - NOT FOUND - Dark",
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun FailureFlashTooltipNotFoundDarkPreview() {
+    VeriSphereTheme {
+        FailureFlashTooltip(
+            failure = BubbleState.FailureState.NotFound(),
+            textFaded = false,
+            pointerDirection = PointerDirection.RIGHT,
             modifier = Modifier.fillMaxWidth().padding(16.dp),
         )
     }

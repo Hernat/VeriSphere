@@ -86,10 +86,11 @@ class CaptureFlowSmokeTest {
 
         // Wait for the bubble's compose view to mount. UiAutomator's
         // global By.descContains targets every accessible window — the
-        // bubble's contentDescription "VeriSphere bubble, idle" is set
-        // in BubbleOverlay.kt.
+        // bubble's contentDescription "Bulle VeriSphere, au repos" is set
+        // in BubbleOverlay.kt (Story 7.5 C6 French baseline; substring
+        // match on "Bulle VeriSphere" covers every BubbleState variant).
         val bubbleVisible = device.wait(
-            Until.hasObject(By.descContains("VeriSphere bubble")),
+            Until.hasObject(By.descContains("Bulle VeriSphere,")),
             BUBBLE_VISIBLE_TIMEOUT_MS,
         )
         assertTrue("Bubble overlay must be visible within $BUBBLE_VISIBLE_TIMEOUT_MS ms", bubbleVisible)
@@ -115,7 +116,7 @@ class CaptureFlowSmokeTest {
         // Confirm the bubble overlay attached (the service's onCreate
         // ran past the FGS-deadline guard and through attachOverlayView).
         val bubbleVisible = device.wait(
-            Until.hasObject(By.descContains("VeriSphere bubble")),
+            Until.hasObject(By.descContains("Bulle VeriSphere,")),
             BUBBLE_VISIBLE_TIMEOUT_MS,
         )
         assertTrue("Bubble overlay must be visible after foreground promotion", bubbleVisible)
@@ -152,13 +153,13 @@ class CaptureFlowSmokeTest {
 
         // Confirm the bubble is attached before we attempt the long-press.
         val bubbleVisible = device.wait(
-            Until.hasObject(By.descContains("VeriSphere bubble")),
+            Until.hasObject(By.descContains("Bulle VeriSphere,")),
             BUBBLE_VISIBLE_TIMEOUT_MS,
         )
         assertTrue("Bubble must be visible before injecting long-press", bubbleVisible)
 
         // Locate the bubble window's bounds so we can target the long-press.
-        val bubble = device.findObject(By.descContains("VeriSphere bubble"))
+        val bubble = device.findObject(By.descContains("Bulle VeriSphere,"))
         assertNotNull("Bubble UI object lookup must succeed", bubble)
         val bounds = bubble.visibleBounds
         val centerX = bounds.centerX()

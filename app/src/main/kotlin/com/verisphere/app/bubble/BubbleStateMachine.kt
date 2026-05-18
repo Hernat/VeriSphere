@@ -150,13 +150,15 @@ class BubbleStateMachine(
         BubbleEvent.AutoFadeTimeout -> when (current) {
             is BubbleState.Idle -> current.copy(faded = true)
             is BubbleState.Verdict -> current.copy(tooltipFaded = true)
-            // Story 3.3 — five distinct `is` branches because `data class.copy()`
-            // is per-class; sealed-interface smart cast does not unify copy().
+            // Story 3.3 + Story 7.5 C1 — six distinct `is` branches because
+            // `data class.copy()` is per-class; sealed-interface smart cast
+            // does not unify copy().
             is BubbleState.FailureState.Offline -> current.copy(tooltipFaded = true)
             is BubbleState.FailureState.Timeout -> current.copy(tooltipFaded = true)
             is BubbleState.FailureState.DailyLimit -> current.copy(tooltipFaded = true)
             is BubbleState.FailureState.QuotaExhausted -> current.copy(tooltipFaded = true)
             is BubbleState.FailureState.PossibleInjection -> current.copy(tooltipFaded = true)
+            is BubbleState.FailureState.NotFound -> current.copy(tooltipFaded = true)
             // Stale timer from a previous Idle / Verdict / FailureState
             // period: a transient state (Pressing / Capturing / Thinking)
             // MUST NOT be flipped back to faded-Idle by a stale fade timer.
@@ -228,13 +230,24 @@ class BubbleStateMachine(
             // The 5 s adaptive-presence fade timer is re-armed by
             // [handleTransitionSideEffects] via the `enteredIdleNotFaded`
             // predicate (code-review patch P1 regression coverage from
-            // Story 1.10 applies identically here).
+            // Story 1.10 applies identically here). Story 7.5 C1 — the
+            // smart-cast `is BubbleState.FailureState` catch-all transitively
+            // covers the new NotFound variant — no enumeration needed.
             BubbleState.Pressing,
             is BubbleState.Verdict,
             is BubbleState.FailureState -> BubbleState.Idle(faded = false)
             // BackToIdle from Idle / Capturing / Thinking is a no-op —
             // Capturing / Thinking should run to completion on their own
             // timers; Idle is already idle.
+            else -> current
+        }
+
+        // Story 7.5 C1 — cross-process trigger from MainActivity's
+        // null-getById branches (FIFO eviction / stale-tap race). Only
+        // Idle transitions to NotFound; every other state is a no-op
+        // because a stale signal cannot rewrite a transient state.
+        BubbleEvent.HistoryRecordNotFound -> when (current) {
+            is BubbleState.Idle -> BubbleState.FailureState.NotFound()
             else -> current
         }
     }
@@ -363,6 +376,11 @@ class BubbleStateMachine(
                 !next.tooltipFaded &&
                     (previous !is BubbleState.FailureState.PossibleInjection ||
                         previous.record.id != next.record.id)
+            // Story 7.5 C1 — NotFound carries no record, so a simple
+            // type-discriminator suffices (mirrors Offline / Timeout /
+            // DailyLimit / QuotaExhausted pattern).
+            is BubbleState.FailureState.NotFound ->
+                !next.tooltipFaded && previous !is BubbleState.FailureState.NotFound
             else -> false
         }
         if (enteredFreshTooltip) {

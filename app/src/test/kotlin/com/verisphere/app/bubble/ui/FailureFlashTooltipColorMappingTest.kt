@@ -192,4 +192,41 @@ class FailureFlashTooltipColorMappingTest {
             failureContentDescriptionFor(BubbleState.FailureState.PossibleInjection(record = sampleRecord())),
         )
     }
+
+    // ----- Story 7.5 code-review P9 — NotFound parity tests for the
+    // 4 mapping helpers covered above (the 5th helper, failureHeadlineColorFor,
+    // has NotFound coverage in the sibling FlashTooltipContrastTokensTest).
+    // Closes Edge Case Hunter #7 (regression gap for the new C1 variant). ---
+
+    @Test
+    fun `failureBackgroundFor NotFound returns vs_verdict_non_verifiable`() {
+        assertEquals(
+            R.color.vs_verdict_non_verifiable,
+            failureBackgroundFor(BubbleState.FailureState.NotFound()),
+        )
+    }
+
+    @Test
+    fun `failureFlashWordResFor NotFound returns flash_not_found_word`() {
+        assertEquals(
+            R.string.flash_not_found_word,
+            failureFlashWordResFor(BubbleState.FailureState.NotFound()),
+        )
+    }
+
+    @Test
+    fun `failureFlashHeadlineResFor NotFound returns flash_not_found_headline`() {
+        assertEquals(
+            R.string.flash_not_found_headline,
+            failureFlashHeadlineResFor(BubbleState.FailureState.NotFound()),
+        )
+    }
+
+    @Test
+    fun `failureContentDescriptionFor NotFound returns bubble_state_not_found_content_description`() {
+        assertEquals(
+            R.string.bubble_state_not_found_content_description,
+            failureContentDescriptionFor(BubbleState.FailureState.NotFound()),
+        )
+    }
 }

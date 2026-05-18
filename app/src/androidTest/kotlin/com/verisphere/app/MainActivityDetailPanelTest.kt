@@ -119,9 +119,9 @@ class MainActivityDetailPanelTest {
         composeTestRule
             .onAllNodesWithText(fixtureHeadlineFor(PRIMARY_ID))
             .assertCountEquals(EXPECTED_MATCHES_PANEL_PLUS_HISTORY)
-        composeTestRule.onNodeWithText("What was read").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Texte lu").assertIsDisplayed()
         composeTestRule.onNodeWithText("Sources").assertIsDisplayed()
-        composeTestRule.onNodeWithText("No one sees this. Just between us.").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Personne d'autre ne le voit. C'est entre toi et nous.").assertIsDisplayed()
     }
 
     @Test
@@ -144,7 +144,7 @@ class MainActivityDetailPanelTest {
         composeTestRule.waitForIdle()
 
         // The panel section heading from Story 2.3 must NOT exist.
-        composeTestRule.onNodeWithText("What was read").assertDoesNotExist()
+        composeTestRule.onNodeWithText("Texte lu").assertDoesNotExist()
         // P1 — Story 4.1 replaced the "VeriSphere" BootstrapPlaceholder
         // with HistoryScreen; assert the seeded record headlines are
         // visible in the history list (which is now the fallback UI
@@ -159,14 +159,14 @@ class MainActivityDetailPanelTest {
     fun back_gesture_closes_panel_and_returns_to_placeholder() {
         sendPanelIntent(PRIMARY_ID)
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("What was read").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Texte lu").assertIsDisplayed()
 
         // Back-press routes through the M3 ModalBottomSheet's
         // onDismissRequest → onDismiss = { detailRecordToShow = null }.
         Espresso.pressBack()
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithText("What was read").assertDoesNotExist()
+        composeTestRule.onNodeWithText("Texte lu").assertDoesNotExist()
         // P1 — Story 4.1 HistoryScreen is the post-dismiss fallback UI;
         // assert the seeded record headline is visible in the history
         // list. Exactly one match (panel is dismissed).
@@ -208,9 +208,9 @@ class MainActivityDetailPanelTest {
         composeTestRule
             .onAllNodesWithText(fixtureHeadlineFor(PRIMARY_ID))
             .assertCountEquals(EXPECTED_MATCHES_PANEL_PLUS_HISTORY)
-        composeTestRule.onNodeWithText("What was read").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Texte lu").assertIsDisplayed()
         composeTestRule.onNodeWithText("Sources").assertIsDisplayed()
-        composeTestRule.onNodeWithText("No one sees this. Just between us.").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Personne d'autre ne le voit. C'est entre toi et nous.").assertIsDisplayed()
 
         // No truncation ellipsis leaks into any rendered Text node —
         // Story 2.3 D3 in deferred-work.md acknowledges this assertion
@@ -227,15 +227,15 @@ class MainActivityDetailPanelTest {
         // cycle.
         sendPanelIntent(PRIMARY_ID)
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("What was read").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Texte lu").assertIsDisplayed()
 
         Espresso.pressBack()
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("What was read").assertDoesNotExist()
+        composeTestRule.onNodeWithText("Texte lu").assertDoesNotExist()
 
         sendPanelIntent(PRIMARY_ID)
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("What was read").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Texte lu").assertIsDisplayed()
         composeTestRule
             .onAllNodesWithText(fixtureHeadlineFor(PRIMARY_ID))
             .assertCountEquals(EXPECTED_MATCHES_PANEL_PLUS_HISTORY)

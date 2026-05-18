@@ -2,48 +2,48 @@
     <string name="app_name">VeriSphere</string>
 
     <!-- Story 1.6 — BubbleOverlayService foreground notification (AR19, NFR10) -->
-    <string name="bubble_service_channel_name">VeriSphere Overlay</string>
-    <string name="bubble_service_ready">VeriSphere is ready</string>
+    <string name="bubble_service_channel_name">Overlay VeriSphere</string>
+    <string name="bubble_service_ready">VeriSphere est prêt</string>
 
     <!-- Story 1.6 — PermissionExplanationScreen (overlay-permission denial path).
          Full first-launch orchestration is Story 5.2; these strings cover the
          minimal "denied → explain → re-attempt or exit" flow. -->
-    <string name="permission_overlay_explanation">VeriSphere needs the \"Display over other apps\" permission to show the fact-check bubble while you use other apps.</string>
-    <string name="permission_allow_overlay">Allow overlay</string>
-    <string name="permission_exit">Exit</string>
-    <string name="permission_settings_unavailable">This device does not expose the overlay-permission screen. Please enable \"Display over other apps\" for VeriSphere from your system settings.</string>
+    <string name="permission_overlay_explanation">VeriSphere a besoin de la permission \"Afficher par-dessus les autres applications\" pour afficher la bulle de fact-check pendant que tu utilises d\'autres apps.</string>
+    <string name="permission_allow_overlay">Autoriser</string>
+    <string name="permission_exit">Quitter</string>
+    <string name="permission_settings_unavailable">Cet appareil n\'expose pas l\'écran de permission d\'overlay. Active \"Afficher par-dessus les autres applications\" pour VeriSphere via les Paramètres système.</string>
 
     <!-- Story 1.7 — BubbleOverlay idle composable accessibility (UX-DR5, NFR12, UX-DR18) -->
-    <string name="bubble_idle_content_description">VeriSphere bubble, idle</string>
+    <string name="bubble_idle_content_description">Bulle VeriSphere, au repos</string>
 
     <!-- Story 1.10 — BubbleOverlay non-Idle, non-Verdict state contentDescriptions
          (UX-DR18, NFR12). Verdict-state contentDescriptions live in strings_verdict.xml. -->
-    <string name="bubble_pressing_content_description">VeriSphere bubble, capturing in 1 second</string>
-    <string name="bubble_capturing_content_description">VeriSphere bubble, capturing</string>
-    <string name="bubble_thinking_content_description">VeriSphere bubble, verifying</string>
+    <string name="bubble_pressing_content_description">Bulle VeriSphere, capture dans 1 seconde</string>
+    <string name="bubble_capturing_content_description">Bulle VeriSphere, capture</string>
+    <string name="bubble_thinking_content_description">Bulle VeriSphere, vérification</string>
 
     <!-- Story 2.1 — SourceLinkChip a11y (UX-DR18, NFR12). %1$s = publisher,
          %2$s = dateYearMonth (YYYY-MM). Strings live here (not in
          strings_verdict.xml) per architecture line 700 — that file is
          reserved for verdict-word + verdict contentDescriptions. -->
-    <string name="source_chip_a11y_with_date">Source: %1$s, %2$s, opens in browser</string>
-    <string name="source_chip_a11y_no_date">Source: %1$s, opens in browser</string>
+    <string name="source_chip_a11y_with_date">Source : %1$s, %2$s, ouvre dans le navigateur</string>
+    <string name="source_chip_a11y_no_date">Source : %1$s, ouvre dans le navigateur</string>
 
     <!-- Story 4.2 — HistoryScreen empty-state copy (UX-DR17, UX spec line 764).
-         Verbatim from the UX spec; do not reword. Story 7.5 (V1-language=French)
-         owns the translation pass. -->
-    <string name="history_empty_title">No verdicts yet.</string>
-    <string name="history_empty_subtitle">Long-press the bubble to begin.</string>
+         V1 French baseline shipped by Story 7.5 — DO NOT regress to English
+         without Hernat sign-off. -->
+    <string name="history_empty_title">Pas encore de verdicts.</string>
+    <string name="history_empty_subtitle">Long-press la bulle pour commencer.</string>
 
     <!-- Story 4.2 — HistoryScreen empty-state glyph a11y (UX-DR18, NFR12). -->
-    <string name="history_empty_glyph_content_description">VeriSphere bubble</string>
+    <string name="history_empty_glyph_content_description">Bulle VeriSphere</string>
 
     <!-- Story 6.2 — UpdateBanner / bubble update-dot overlay (FR23, UX-DR10,
          UX spec line 620 + 701). %1$s = SemVer string from version-info.json. -->
-    <string name="update_banner_text">Version %1$s available</string>
-    <string name="update_banner_download">Download</string>
-    <string name="update_banner_dismiss_content_description">Dismiss update banner</string>
-    <string name="bubble_update_available_dot_content_description">Update available</string>
+    <string name="update_banner_text">Version %1$s disponible</string>
+    <string name="update_banner_download">Télécharger</string>
+    <string name="update_banner_dismiss_content_description">Masquer la bannière de mise à jour</string>
+    <string name="bubble_update_available_dot_content_description">Mise à jour disponible</string>
 
     <!-- Story 1.8.5 — VeriSphereAccessibilityService (architecture D5.13, AR27, D2.11; UX-DR17 warm-tone copy) -->
     <string name="accessibility_service_label">VeriSphere</string>

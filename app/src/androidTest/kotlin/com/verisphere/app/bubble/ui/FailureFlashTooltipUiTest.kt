@@ -57,8 +57,8 @@ class FailureFlashTooltipUiTest {
             }
         }
 
-        composeRule.onNodeWithText("OFFLINE").assertIsDisplayed()
-        composeRule.onNodeWithText("Try again when you're online").assertIsDisplayed()
+        composeRule.onNodeWithText("HORS LIGNE").assertIsDisplayed()
+        composeRule.onNodeWithText("Réessaie une fois en ligne.").assertIsDisplayed()
     }
 
     @Test
@@ -73,8 +73,8 @@ class FailureFlashTooltipUiTest {
             }
         }
 
-        composeRule.onNodeWithText("TIMEOUT").assertIsDisplayed()
-        composeRule.onNodeWithText("Try again").assertIsDisplayed()
+        composeRule.onNodeWithText("DÉLAI DÉPASSÉ").assertIsDisplayed()
+        composeRule.onNodeWithText("Réessaie.").assertIsDisplayed()
     }
 
     @Test
@@ -89,8 +89,8 @@ class FailureFlashTooltipUiTest {
             }
         }
 
-        composeRule.onNodeWithText("DAILY LIMIT").assertIsDisplayed()
-        composeRule.onNodeWithText("Daily limit reached. Try again tomorrow.").assertIsDisplayed()
+        composeRule.onNodeWithText("LIMITE QUOTIDIENNE").assertIsDisplayed()
+        composeRule.onNodeWithText("Limite quotidienne atteinte. Réessaie demain.").assertIsDisplayed()
     }
 
     @Test
@@ -105,8 +105,8 @@ class FailureFlashTooltipUiTest {
             }
         }
 
-        composeRule.onNodeWithText("UNAVAILABLE").assertIsDisplayed()
-        composeRule.onNodeWithText("Service temporarily unavailable").assertIsDisplayed()
+        composeRule.onNodeWithText("INDISPONIBLE").assertIsDisplayed()
+        composeRule.onNodeWithText("Service temporairement indisponible.").assertIsDisplayed()
     }
 
     @Test
@@ -121,8 +121,8 @@ class FailureFlashTooltipUiTest {
             }
         }
 
-        composeRule.onNodeWithText("POSSIBLE INJECTION").assertIsDisplayed()
-        composeRule.onNodeWithText("See OCR text").assertIsDisplayed()
+        composeRule.onNodeWithText("INJECTION POSSIBLE").assertIsDisplayed()
+        composeRule.onNodeWithText("Voir le texte lu.").assertIsDisplayed()
     }
 
     @Test
@@ -139,7 +139,7 @@ class FailureFlashTooltipUiTest {
             }
         }
 
-        composeRule.onNodeWithText("POSSIBLE INJECTION").performClick()
+        composeRule.onNodeWithText("INJECTION POSSIBLE").performClick()
         assertTrue("PossibleInjection tap should invoke onClick", clicked)
     }
 
@@ -163,7 +163,7 @@ class FailureFlashTooltipUiTest {
             }
         }
 
-        composeRule.onNodeWithText("OFFLINE").performClick()
+        composeRule.onNodeWithText("HORS LIGNE").performClick()
         assertFalse("Offline tap must NOT invoke onClick — Surface should be non-clickable", clicked)
     }
 
@@ -182,7 +182,7 @@ class FailureFlashTooltipUiTest {
             }
         }
 
-        composeRule.onNodeWithText("TIMEOUT").performClick()
+        composeRule.onNodeWithText("DÉLAI DÉPASSÉ").performClick()
         assertFalse("Timeout tap must NOT invoke onClick — Surface should be non-clickable", clicked)
     }
 }
