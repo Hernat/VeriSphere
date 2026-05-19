@@ -115,11 +115,13 @@ class MainActivityDetailPanelTest {
         // node lookup matches exactly one node — the panel headline.
         // The history-list LazyColumn row for the same record also
         // contains this string; we expect 2 matches and accept either.
-        composeTestRule.onNodeWithText("TRUE").assertIsDisplayed()
+        composeTestRule.onNodeWithText("VRAI").assertIsDisplayed()
         composeTestRule
             .onAllNodesWithText(fixtureHeadlineFor(PRIMARY_ID))
             .assertCountEquals(EXPECTED_MATCHES_PANEL_PLUS_HISTORY)
-        composeTestRule.onNodeWithText("Texte lu").assertIsDisplayed()
+        // Epic 9 Story 9.2 — section renamed "Texte lu" → "Texte analysé"
+        // (collapsed by default in new layout, header still visible).
+        composeTestRule.onNodeWithText("Texte analysé", substring = true).assertIsDisplayed()
         composeTestRule.onNodeWithText("Sources").assertIsDisplayed()
         composeTestRule.onNodeWithText("Personne d'autre ne le voit. C'est entre toi et nous.").assertIsDisplayed()
     }
@@ -132,7 +134,7 @@ class MainActivityDetailPanelTest {
         sendPanelIntent(TOOLTIP_ID)
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithText("TRUE").assertIsDisplayed()
+        composeTestRule.onNodeWithText("VRAI").assertIsDisplayed()
         composeTestRule
             .onAllNodesWithText(fixtureHeadlineFor(TOOLTIP_ID))
             .assertCountEquals(EXPECTED_MATCHES_PANEL_PLUS_HISTORY)
@@ -144,7 +146,7 @@ class MainActivityDetailPanelTest {
         composeTestRule.waitForIdle()
 
         // The panel section heading from Story 2.3 must NOT exist.
-        composeTestRule.onNodeWithText("Texte lu").assertDoesNotExist()
+        composeTestRule.onNodeWithText("Texte analysé", substring = true).assertDoesNotExist()
         // P1 — Story 4.1 replaced the "VeriSphere" BootstrapPlaceholder
         // with HistoryScreen; assert the seeded record headlines are
         // visible in the history list (which is now the fallback UI
@@ -159,14 +161,16 @@ class MainActivityDetailPanelTest {
     fun back_gesture_closes_panel_and_returns_to_placeholder() {
         sendPanelIntent(PRIMARY_ID)
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("Texte lu").assertIsDisplayed()
+        // Epic 9 Story 9.2 — section renamed "Texte lu" → "Texte analysé"
+        // (collapsed by default in new layout, header still visible).
+        composeTestRule.onNodeWithText("Texte analysé", substring = true).assertIsDisplayed()
 
         // Back-press routes through the M3 ModalBottomSheet's
         // onDismissRequest → onDismiss = { detailRecordToShow = null }.
         Espresso.pressBack()
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithText("Texte lu").assertDoesNotExist()
+        composeTestRule.onNodeWithText("Texte analysé", substring = true).assertDoesNotExist()
         // P1 — Story 4.1 HistoryScreen is the post-dismiss fallback UI;
         // assert the seeded record headline is visible in the history
         // list. Exactly one match (panel is dismissed).
@@ -204,11 +208,13 @@ class MainActivityDetailPanelTest {
         // Same 5 section assertions as method 1 — every node from
         // method 1 must remain reachable via the activity-mounted
         // panel composition.
-        composeTestRule.onNodeWithText("TRUE").assertIsDisplayed()
+        composeTestRule.onNodeWithText("VRAI").assertIsDisplayed()
         composeTestRule
             .onAllNodesWithText(fixtureHeadlineFor(PRIMARY_ID))
             .assertCountEquals(EXPECTED_MATCHES_PANEL_PLUS_HISTORY)
-        composeTestRule.onNodeWithText("Texte lu").assertIsDisplayed()
+        // Epic 9 Story 9.2 — section renamed "Texte lu" → "Texte analysé"
+        // (collapsed by default in new layout, header still visible).
+        composeTestRule.onNodeWithText("Texte analysé", substring = true).assertIsDisplayed()
         composeTestRule.onNodeWithText("Sources").assertIsDisplayed()
         composeTestRule.onNodeWithText("Personne d'autre ne le voit. C'est entre toi et nous.").assertIsDisplayed()
 
@@ -227,15 +233,19 @@ class MainActivityDetailPanelTest {
         // cycle.
         sendPanelIntent(PRIMARY_ID)
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("Texte lu").assertIsDisplayed()
+        // Epic 9 Story 9.2 — section renamed "Texte lu" → "Texte analysé"
+        // (collapsed by default in new layout, header still visible).
+        composeTestRule.onNodeWithText("Texte analysé", substring = true).assertIsDisplayed()
 
         Espresso.pressBack()
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("Texte lu").assertDoesNotExist()
+        composeTestRule.onNodeWithText("Texte analysé", substring = true).assertDoesNotExist()
 
         sendPanelIntent(PRIMARY_ID)
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("Texte lu").assertIsDisplayed()
+        // Epic 9 Story 9.2 — section renamed "Texte lu" → "Texte analysé"
+        // (collapsed by default in new layout, header still visible).
+        composeTestRule.onNodeWithText("Texte analysé", substring = true).assertIsDisplayed()
         composeTestRule
             .onAllNodesWithText(fixtureHeadlineFor(PRIMARY_ID))
             .assertCountEquals(EXPECTED_MATCHES_PANEL_PLUS_HISTORY)

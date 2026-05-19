@@ -371,7 +371,17 @@ class GeminiClient(
         id = UUID.randomUUID().toString(),
         timestampMs = System.currentTimeMillis(),
         verdictLabel = verdict.verdictLabel,
-        headline = verdict.headline,
+        // Epic 8 fix — strip the leading "C'EST VRAI :" / "C'EST FAUX :"
+        // / "DOUTEUX :" / "NON VÉRIFIABLE :" prefix that the system
+        // prompt v1 asks Gemini to emit. The verdictLabel is the source
+        // of truth (rendered as a separate UI badge in FlashTooltip +
+        // DetailPanel + HistoryItemRow); duplicating it inside the
+        // headline only creates UX confusion when Gemini's two fields
+        // disagree (observed 2026-05-19: verdictLabel=NON_VERIFIABLE +
+        // headline starting "C'EST VRAI :"). Strip is verdict-label
+        // agnostic — removes WHATEVER prefix appears, even when it
+        // matches the label, so all surfaces see substance only.
+        headline = stripVerdictPrefix(verdict.headline, verdict.verdictLabel),
         contextLines = verdict.contextLines,
         sourceLinks = verdict.sources,
         ocrText = verdict.ocrText,
@@ -384,6 +394,11 @@ class GeminiClient(
         // not a Failure).
         injectionDetected = verdict.injectionDetected,
     )
+
+    // Code-review F10 — stripVerdictPrefix lives in VerdictHeadline.kt
+    // (top-level, same gemini package). The deprecated copy + the
+    // companion VERDICT_PREFIXES constant were removed; the duplicate
+    // was drift-bait.
 
     private fun logOutcome(outcome: VerificationOutcome) {
         // Privacy posture: log the verdict label only on success (label is

@@ -26,36 +26,67 @@ fun VeriSphereTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    // Resolve palette tokens once per composition; values/colors.xml vs
-    // values-night/colors.xml are picked by the platform automatically.
-    val background = colorResource(R.color.vs_background)
-    val surfaceVariant = colorResource(R.color.vs_surface_variant)
-    val onBackground = colorResource(R.color.vs_on_background)
-    val onBackgroundMuted = colorResource(R.color.vs_on_background_muted)
-    val brandAccent = colorResource(R.color.vs_brand_google_blue)
-    val onBrandAccent = colorResource(R.color.vs_on_brand_google_blue)
+    // Epic 8 Story 8.1 — wholesale M3 surface swap from V1 (white/grey
+    // Google palette) to Wispr Flow inspired editorial tokens. Every
+    // M3 composable reading colorScheme.background / surface /
+    // onBackground inherits the cream canvas + warm ink palette
+    // automatically — HistoryScreen, all Scaffolds, Surface containers,
+    // Card variants. Legacy V1 vs_background / vs_surface_variant /
+    // vs_on_background tokens stay in colors.xml for downstream
+    // migration safety but are unused.
+    val background = colorResource(R.color.vs_canvas)
+    val surfaceVariant = colorResource(R.color.vs_paper)
+    val onBackground = colorResource(R.color.vs_ink)
+    val onBackgroundMuted = colorResource(R.color.vs_ink_muted)
+    val brandAccent = colorResource(R.color.vs_accent_sage_deep)
+    val onBrandAccent = colorResource(R.color.vs_on_accent_sage_deep)
+    // Code-review F13 (Group B) — every M3 slot that was previously
+    // left at the baseline purple/red palette is now mapped into the
+    // editorial token family so any M3 composable that reads
+    // `secondary` / `tertiary` / `error` / `errorContainer` /
+    // `inversePrimary` (Snackbar, FilterChip, NavigationBar indicator,
+    // ModalBottomSheet scrim) paints on cream + sage + warm gold
+    // instead of the M3-default lilac.
+    val accentLavender = colorResource(R.color.vs_accent_lavender)
+    val accentPulse = colorResource(R.color.vs_accent_pulse)
+    val onAccentPulse = colorResource(R.color.vs_on_accent_pulse)
+    val verdictFalse = colorResource(R.color.vs_verdict_false)
 
     val colorScheme = if (darkTheme) {
         darkColorScheme(
             primary = brandAccent,
             onPrimary = onBrandAccent,
+            secondary = accentLavender,
+            onSecondary = onBackground,
+            tertiary = accentPulse,
+            onTertiary = onAccentPulse,
+            error = verdictFalse,
+            onError = onBackground,
             background = background,
             surface = background,
             surfaceVariant = surfaceVariant,
             onBackground = onBackground,
             onSurface = onBackground,
             onSurfaceVariant = onBackgroundMuted,
+            inversePrimary = brandAccent,
         )
     } else {
         lightColorScheme(
             primary = brandAccent,
             onPrimary = onBrandAccent,
+            secondary = accentLavender,
+            onSecondary = onBackground,
+            tertiary = accentPulse,
+            onTertiary = onAccentPulse,
+            error = verdictFalse,
+            onError = colorResource(R.color.vs_on_brand_google_blue),
             background = background,
             surface = background,
             surfaceVariant = surfaceVariant,
             onBackground = onBackground,
             onSurface = onBackground,
             onSurfaceVariant = onBackgroundMuted,
+            inversePrimary = brandAccent,
         )
     }
 

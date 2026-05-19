@@ -4,6 +4,10 @@ import com.verisphere.app.gemini.SourceCitation
 import com.verisphere.app.gemini.VerdictLabel
 import com.verisphere.app.gemini.VerificationOutcome
 import com.verisphere.app.gemini.VerificationOutcome.Failure
+import com.verisphere.app.serp.AgreementVerdict
+import com.verisphere.app.serp.SerpEngine
+import com.verisphere.app.serp.SerpOutcome
+import com.verisphere.app.serp.SerpReference
 import com.verisphere.app.storage.RateLimitRepository
 import com.verisphere.app.storage.SessionRecord
 import kotlinx.coroutines.CancellationException
@@ -18,6 +22,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Assert.fail
 import org.junit.Test
 import java.io.IOException
@@ -332,6 +337,204 @@ class CapturePipelineTest {
         assertNotNull("CancellationException must propagate from runCapture", caught)
         assertEquals("parent scope cancelled", caught?.message)
     }
+
+    // ─── Epic 9 Story 9.1 — enrichWithSerp orchestration (code-review P7) ──
+
+    @Test
+    fun `enrichWithSerp skipped when shouldSkipSerp returns true`() = runTest {
+        // Code-review P7 — quota cooldown active → no SerpAPI call,
+        // Gemini verdict returned unchanged.
+        var serpCalled = false
+        val pipeline = pipelineForSerp(
+            verifyOutcome = VerificationOutcome.Verdict(sampleSessionRecord()),
+            shouldSkipSerp = { true },
+            serpSearch = { _ ->
+                serpCalled = true
+                error("serpSearch must NOT be called when shouldSkipSerp returns true")
+            },
+        )
+
+        val outcome = pipeline.runCapture()
+
+        assertTrue("expected Verdict but got $outcome", outcome is VerificationOutcome.Verdict)
+        assertFalse("serpSearch must not fire when gate is closed", serpCalled)
+        // Record is the Gemini one — no SERP fields populated.
+        assertTrue((outcome as VerificationOutcome.Verdict).record.serpReferences.isEmpty())
+    }
+
+    @Test
+    fun `enrichWithSerp skipped when injectionDetected is true`() = runTest {
+        // Code-review DN2 — PossibleInjection state foregrounds the
+        // security warning ; SERP enrichment is suppressed.
+        var serpCalled = false
+        val injectedRecord = sampleSessionRecord().copy(injectionDetected = true)
+        val pipeline = pipelineForSerp(
+            verifyOutcome = VerificationOutcome.Verdict(injectedRecord),
+            shouldSkipSerp = { false },
+            serpSearch = { _ ->
+                serpCalled = true
+                error("serpSearch must NOT be called when injectionDetected=true")
+            },
+        )
+
+        val outcome = pipeline.runCapture()
+
+        assertTrue(outcome is VerificationOutcome.Verdict)
+        assertFalse("serpSearch must not fire on injection-flagged verdicts", serpCalled)
+        assertTrue((outcome as VerificationOutcome.Verdict).record.injectionDetected)
+    }
+
+    @Test
+    fun `enrichWithSerp Success populates record SERP fields and clears quota gate`() = runTest {
+        var quotaCleared = false
+        val refs = listOf(SerpReference(title = "T", url = "https://example.com", snippet = "s"))
+        val pipeline = pipelineForSerp(
+            verifyOutcome = VerificationOutcome.Verdict(sampleSessionRecord()),
+            serpSearch = { _ ->
+                SerpOutcome.Success(
+                    references = refs,
+                    markdown = "L'affirmation est confirmée par les sources. Le fait est exact.",
+                    engineUsed = SerpEngine.GoogleAiMode,
+                )
+            },
+            onSerpSuccess = { quotaCleared = true },
+        )
+
+        val outcome = pipeline.runCapture()
+
+        val verdict = outcome as VerificationOutcome.Verdict
+        assertEquals(refs, verdict.record.serpReferences)
+        assertTrue(verdict.record.serpMarkdown.isNotBlank())
+        // VerdictLabel.NON_VERIFIABLE shortcuts AgreementScorer to Inconclusive
+        // regardless of markdown (locked by AgreementScorerTest). For the
+        // happy non-NON_VERIFIABLE path see the next test.
+        assertTrue(quotaCleared)
+    }
+
+    @Test
+    fun `enrichWithSerp Quota trips onSerpQuotaExceeded and returns Gemini verdict`() = runTest {
+        var quotaMarked = false
+        val pipeline = pipelineForSerp(
+            verifyOutcome = VerificationOutcome.Verdict(sampleSessionRecord()),
+            serpSearch = { _ -> SerpOutcome.Failure.Quota },
+            onSerpQuotaExceeded = { quotaMarked = true },
+        )
+
+        val outcome = pipeline.runCapture()
+
+        assertTrue(quotaMarked)
+        assertTrue(outcome is VerificationOutcome.Verdict)
+        assertTrue((outcome as VerificationOutcome.Verdict).record.serpReferences.isEmpty())
+    }
+
+    @Test
+    fun `enrichWithSerp NotConfigured returns Gemini verdict silently`() = runTest {
+        val pipeline = pipelineForSerp(
+            verifyOutcome = VerificationOutcome.Verdict(sampleSessionRecord()),
+            serpSearch = { _ -> SerpOutcome.Failure.NotConfigured },
+        )
+
+        val outcome = pipeline.runCapture()
+
+        assertTrue(outcome is VerificationOutcome.Verdict)
+        assertEquals(
+            "SERP fields must be empty on NotConfigured",
+            AgreementVerdict.Inconclusive,
+            (outcome as VerificationOutcome.Verdict).record.agreement,
+        )
+    }
+
+    @Test
+    fun `enrichWithSerp EmptyQuery returns Gemini verdict silently`() = runTest {
+        // Code-review P4 — empty extractedClaim is no longer aliased to
+        // NotConfigured but still leads to the same UX outcome.
+        val pipeline = pipelineForSerp(
+            verifyOutcome = VerificationOutcome.Verdict(sampleSessionRecord()),
+            serpSearch = { _ -> SerpOutcome.Failure.EmptyQuery },
+        )
+
+        val outcome = pipeline.runCapture()
+
+        assertTrue(outcome is VerificationOutcome.Verdict)
+    }
+
+    @Test
+    fun `enrichWithSerp swallows exceptions and returns Gemini verdict`() = runTest {
+        val pipeline = pipelineForSerp(
+            verifyOutcome = VerificationOutcome.Verdict(sampleSessionRecord()),
+            serpSearch = { _ -> throw IOException("network blew up unexpectedly") },
+        )
+
+        val outcome = pipeline.runCapture()
+
+        assertTrue("unexpected SerpAPI exception must not break the pipeline", outcome is VerificationOutcome.Verdict)
+    }
+
+    @Test
+    fun `enrichWithSerp NOT called when Gemini returns a Failure`() = runTest {
+        var serpCalled = false
+        val pipeline = pipelineForSerp(
+            verifyOutcome = Failure.Offline,
+            serpSearch = { _ ->
+                serpCalled = true
+                error("serpSearch must NOT fire on a Gemini Failure")
+            },
+        )
+
+        val outcome = pipeline.runCapture()
+
+        assertEquals(Failure.Offline, outcome)
+        assertFalse(serpCalled)
+    }
+
+    @Test
+    fun `enrichWithSerp caps references and truncates markdown (F15)`() = runTest {
+        // Code-review F15 — encrypted SharedPrefs payload bound.
+        val twentyRefs = (1..20).map {
+            SerpReference(title = "T$it", url = "https://example.com/$it", snippet = "s$it")
+        }
+        val hugeMarkdown = "x".repeat(10_000)
+        val pipeline = pipelineForSerp(
+            verifyOutcome = VerificationOutcome.Verdict(sampleSessionRecord()),
+            serpSearch = { _ ->
+                SerpOutcome.Success(
+                    references = twentyRefs,
+                    markdown = hugeMarkdown,
+                    engineUsed = SerpEngine.GoogleAiMode,
+                )
+            },
+        )
+
+        val outcome = pipeline.runCapture()
+        val record = (outcome as VerificationOutcome.Verdict).record
+
+        assertEquals(
+            "references must be capped at MAX_PERSISTED_REFS (6)",
+            6,
+            record.serpReferences.size,
+        )
+        assertTrue(
+            "markdown must be truncated at MAX_PERSISTED_MARKDOWN_CHARS (2000)",
+            record.serpMarkdown.length <= 2_000,
+        )
+    }
+
+    private fun pipelineForSerp(
+        verifyOutcome: VerificationOutcome,
+        shouldSkipSerp: () -> Boolean = { false },
+        serpSearch: suspend (String) -> SerpOutcome = { _ -> SerpOutcome.Failure.NotConfigured },
+        onSerpQuotaExceeded: () -> Unit = {},
+        onSerpSuccess: () -> Unit = {},
+    ): CapturePipeline = CapturePipeline(
+        rateLimitRepository = FakeRateLimitRepository(accept = true),
+        hasToken = { true },
+        frameExtractor = { ByteArray(SAMPLE_FRAME_SIZE) { it.toByte() } },
+        verify = { verifyOutcome },
+        serpSearch = serpSearch,
+        shouldSkipSerp = shouldSkipSerp,
+        onSerpQuotaExceeded = onSerpQuotaExceeded,
+        onSerpSuccess = onSerpSuccess,
+    )
 
     /**
      * Helper for the symmetric Failure pass-through tests. Locks the

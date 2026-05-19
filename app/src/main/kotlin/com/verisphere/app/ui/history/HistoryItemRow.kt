@@ -3,6 +3,7 @@ package com.verisphere.app.ui.history
 import android.content.res.Configuration
 import android.text.format.DateUtils
 import androidx.annotation.StringRes
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -36,8 +38,11 @@ import androidx.compose.ui.unit.dp
 import com.verisphere.app.R
 import com.verisphere.app.gemini.SourceCitation
 import com.verisphere.app.gemini.VerdictLabel
+import com.verisphere.app.gemini.stripVerdictPrefix
 import com.verisphere.app.storage.SessionRecord
+import com.verisphere.app.ui.theme.VSPalette
 import com.verisphere.app.ui.theme.VSSpacing
+import com.verisphere.app.ui.theme.VSTypography
 import com.verisphere.app.ui.theme.VeriSphereTheme
 
 /**
@@ -88,65 +93,83 @@ fun HistoryItemRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val verdictWord = stringResource(verdictWordResFor(record.verdictLabel))
     val verdictAnnouncement = stringResource(verdictContentDescriptionFor(record.verdictLabel))
     val timestamp = relativeTimestamp(record.timestampMs)
-    val rowA11yLabel = "$verdictAnnouncement. ${record.headline}. $timestamp"
+    // Code-review F14 (Group B) — strip the verdict prefix from the
+    // headline read by TalkBack so the spoken UI matches the visual
+    // surface (which already strips via the Text below). Legacy records
+    // persisted before [GeminiClient.toSessionRecord] strip support
+    // shipped would otherwise have TalkBack reading "Verdict : vrai.
+    // C'EST VRAI : <claim>. <timestamp>" — verdict announced twice.
+    val strippedHeadline = stripVerdictPrefix(record.headline, record.verdictLabel)
+    val rowA11yLabel = "$verdictAnnouncement. $strippedHeadline. $timestamp"
 
-    // Patch P5 — role moved into Modifier.clickable so the click action
-    // and Role.Button install on a single semantic node (canonical
-    // Compose idiom). The mergeDescendants block now only contributes
-    // the merged contentDescription.
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .heightIn(min = HistoryItemRowDefaults.MinHeight)
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(
-                horizontal = VSSpacing.space16,
-                vertical = VSSpacing.space12,
-            )
-            .semantics(mergeDescendants = true) {
-                contentDescription = rowA11yLabel
-            },
-        verticalAlignment = Alignment.CenterVertically,
+    // Epic 8 Story 8.1 — wrap each row in a Wispr-style paper card:
+    // paper background + hairline border + 16 dp soft corners. Click +
+    // a11y semantics stay on the row content (canonical pattern from
+    // Story 4.2 patch P5 — role inside .clickable, mergeDescendants on
+    // the same node as contentDescription).
+    // Code-review F28 (Group B) — Surface body indented one level deeper
+    // so the Row block is visually nested inside the Surface scope
+    // (matches the project's prevailing 4-space-per-block convention).
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = VSPalette.paper,
+        contentColor = VSPalette.ink,
+        shape = RoundedCornerShape(VSSpacing.space16),
+        border = BorderStroke(1.dp, VSPalette.hairline),
     ) {
-        Box(
-            modifier = Modifier.size(HistoryItemRowDefaults.EmojiSlotSize),
-            contentAlignment = Alignment.Center,
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = HistoryItemRowDefaults.MinHeight)
+                .clickable(role = Role.Button, onClick = onClick)
+                .padding(
+                    horizontal = VSSpacing.space16,
+                    vertical = VSSpacing.space12,
+                )
+                .semantics(mergeDescendants = true) {
+                    contentDescription = rowA11yLabel
+                },
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = emojiForLabel(record.verdictLabel),
-                style = MaterialTheme.typography.headlineSmall,
-            )
+            Box(
+                modifier = Modifier.size(HistoryItemRowDefaults.EmojiSlotSize),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = monoGlyphForLabel(record.verdictLabel),
+                    style = VSTypography.titleSerif,
+                    color = VSPalette.ink,
+                )
+            }
+            Spacer(modifier = Modifier.width(VSSpacing.space12))
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(VSSpacing.space4),
+            ) {
+                Text(
+                    // Epic 8 — defensive strip of any "C'EST VRAI :" / "C'EST
+                    // FAUX :" / "DOUTEUX :" / "NON VÉRIFIABLE :" prefix that
+                    // Gemini may have written into the headline (verdictLabel
+                    // is the source of truth, rendered as the leading glyph).
+                    // F14 — reuse the same strippedHeadline computed above for
+                    // a11y so visual + spoken stay in lockstep.
+                    text = strippedHeadline,
+                    style = VSTypography.headlineBodySans,
+                    color = VSPalette.ink,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = timestamp,
+                    style = VSTypography.labelTrackedSans,
+                    color = VSPalette.inkSoft,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
-        Spacer(modifier = Modifier.width(VSSpacing.space12))
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(VSSpacing.space4),
-        ) {
-            Text(
-                text = verdictWord,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-            )
-            Text(
-                text = record.headline,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Spacer(modifier = Modifier.width(VSSpacing.space12))
-        Text(
-            text = timestamp,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
     }
 }
 
@@ -168,11 +191,23 @@ internal object HistoryItemRowDefaults {
     val BubbleGlyphSize: Dp = 56.dp
 }
 
-private fun emojiForLabel(label: VerdictLabel): String = when (label) {
-    VerdictLabel.TRUE -> "✅"
-    VerdictLabel.FALSE -> "❌"
-    VerdictLabel.DOUBTFUL -> "⚠️"
-    VerdictLabel.NON_VERIFIABLE -> "⚪"
+/**
+ * Epic 8 Story 8.1 + Epic 9 hotfix — monochrome editorial glyphs
+ * replacing the system emoji set in HistoryItemRow. Renders in
+ * [VSTypography.titleSerif] (EB Garamond / Noto Serif) with
+ * [VSPalette.ink] for the Wispr Flow aesthetic. The previous
+ * colourful `emojiForLabel` helper (✅❌⚠️⚪) was removed once every
+ * caller had migrated to this helper.
+ */
+private fun monoGlyphForLabel(label: VerdictLabel): String = when (label) {
+    VerdictLabel.TRUE -> "✓"
+    VerdictLabel.FALSE -> "✗"
+    // Code-review F15 (Group B) — "?" was indistinguishable from regular
+    // question-mark punctuation when the headline itself contained "?".
+    // U+2047 (DOUBLE QUESTION MARK) reads unambiguously as a marker
+    // glyph, matching the visual register of the 3 other status glyphs.
+    VerdictLabel.DOUBTFUL -> "⁇"
+    VerdictLabel.NON_VERIFIABLE -> "∅"
 }
 
 @StringRes

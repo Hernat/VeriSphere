@@ -82,15 +82,13 @@ class HistoryItemRowUiTest {
     }
 
     @Test
-    fun history_item_row_renders_verdict_word_for_each_label() {
-        // Patch P6 (code review 2026-05-14) — single setContent renders
-        // all 4 labels at once (one row per label inside a Column);
-        // assertions iterate after composition completes. Avoids the
-        // multi-setContent pattern (fragile across Compose versions per
-        // BH#15 / EC#10). Strings loaded via
-        // composeTestRule.activity.getString(...) so the assertion
-        // follows the resource (Story 2.1 deferred-work line 174 i18n
-        // pattern — avoids hardcoded English).
+    fun history_item_row_renders_mono_glyph_for_each_label() {
+        // Code-review F1 (Group B) — Epic 8 Wispr refonte removed the
+        // verdict-WORD Text from HistoryItemRow ; only the mono glyph
+        // remains in the leading slot. This test was previously
+        // asserting the word and would fail on the new layout. Updated
+        // to assert the per-label mono glyph (matches
+        // [monoGlyphForLabel] in production : ✓ / ✗ / ⁇ / ∅).
         val labels = VerdictLabel.entries
         val recordsByLabel = labels.associateWith { label ->
             sampleRecord(
@@ -115,14 +113,16 @@ class HistoryItemRowUiTest {
         }
 
         labels.forEach { label ->
-            val expectedWordRes = when (label) {
-                VerdictLabel.TRUE -> R.string.flash_verdict_true
-                VerdictLabel.FALSE -> R.string.flash_verdict_false
-                VerdictLabel.DOUBTFUL -> R.string.flash_verdict_doubtful
-                VerdictLabel.NON_VERIFIABLE -> R.string.flash_verdict_non_verifiable
+            val expectedGlyph = when (label) {
+                VerdictLabel.TRUE -> "✓"
+                VerdictLabel.FALSE -> "✗"
+                // F15 — DOUBTFUL glyph changed from "?" to "⁇" (U+2047
+                // DOUBLE QUESTION MARK) so it reads as a marker, not as
+                // ambient punctuation inside a headline that contains "?".
+                VerdictLabel.DOUBTFUL -> "⁇"
+                VerdictLabel.NON_VERIFIABLE -> "∅"
             }
-            val expectedWord = composeTestRule.activity.getString(expectedWordRes)
-            composeTestRule.onNodeWithText(expectedWord).assertIsDisplayed()
+            composeTestRule.onNodeWithText(expectedGlyph).assertIsDisplayed()
         }
     }
 
@@ -241,6 +241,8 @@ class HistoryItemRowUiTest {
             }
         }
 
-        composeTestRule.onNodeWithText("✅").assertIsDisplayed()
+        // Epic 9 hotfix 2026-05-19 — mono glyph swap (✅ → ✓) per
+        // Wispr theme alignment ; monoGlyphForLabel in HistoryItemRow.
+        composeTestRule.onNodeWithText("✓").assertIsDisplayed()
     }
 }

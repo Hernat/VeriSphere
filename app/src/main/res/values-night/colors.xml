@@ -48,4 +48,52 @@
     <!-- Story 6.2 — Update-available dot on bubble (epics L892 dark variant). -->
     <color name="vs_update_dot">#5F6368</color>
 
+    <!-- ============================================================
+         Epic 8 Story 8.1 — Wispr Flow inspired tokens (dark variants).
+         See values/colors.xml for the light counterparts + the
+         migration narrative.
+         ============================================================ -->
+
+    <!-- Neutrals (dark): warm deep brown ink → ivory text. -->
+    <color name="vs_canvas">#1A1612</color>
+    <color name="vs_paper">#221E18</color>
+    <color name="vs_paper_alt">#2C2620</color>
+    <color name="vs_ink">#F0EADC</color>
+    <color name="vs_ink_muted">#B0A99C</color>
+    <!-- Code-review F3 (Group B) — was #7C7568 (3.85:1 on paper, FAIL
+         WCAG AA body in dark mode). Lifted to #908A7E (5.14:1 on
+         paper, PASSES AA body). Mirrors the light-mode darkening of
+         the corresponding token (cross-theme symmetry preserved). -->
+    <color name="vs_ink_soft">#908A7E</color>
+    <color name="vs_hairline">#3A332A</color>
+
+    <!-- Accents (dark) — lifted sage / lavender / pulse for dark-mode
+         contrast against vs_canvas=#1A1612. -->
+    <color name="vs_accent_sage">#9CC2A8</color>
+    <color name="vs_accent_sage_deep">#7BA889</color>
+    <color name="vs_accent_lavender">#B5ABCE</color>
+    <color name="vs_accent_pulse">#DDB97A</color>
+    <!-- Dark sage is lifted (#9CC2A8) so dark text on it stays AA.
+         vs_on_accent_sage_deep stays dark too in dark mode — sage_deep
+         #7BA889 + #1A1612 ink gives ~7.8:1 (AAA). -->
+    <color name="vs_on_accent_sage">#1A1612</color>
+    <color name="vs_on_accent_sage_deep">#1A1612</color>
+    <!-- Code-review F8 (Group B) — on-colour for vs_accent_pulse dark
+         variant (#DDB97A). Dark ink on the lifted gold gives ~9:1
+         (AAA). Symmetric to the light variant — both modes use dark
+         text on the gold pulse surface. -->
+    <color name="vs_on_accent_pulse">#1A1612</color>
+
+    <!-- Verdict softs (dark) — deepened backgrounds, light foreground
+         on-colours for AA contrast. -->
+    <color name="vs_verdict_true_soft">#1F3326</color>
+    <color name="vs_verdict_false_soft">#3D1F1A</color>
+    <color name="vs_verdict_doubtful_soft">#3D3320</color>
+    <color name="vs_verdict_non_verifiable_soft">#2A2330</color>
+
+    <color name="vs_on_verdict_true_soft">#C8E6CF</color>
+    <color name="vs_on_verdict_false_soft">#F2C4B8</color>
+    <color name="vs_on_verdict_doubtful_soft">#EBD49B</color>
+    <color name="vs_on_verdict_non_verifiable_soft">#D5CBEB</color>
+
 </resources>

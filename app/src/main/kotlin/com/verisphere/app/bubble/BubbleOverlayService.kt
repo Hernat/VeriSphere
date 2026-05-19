@@ -401,6 +401,16 @@ class BubbleOverlayService :
             // CapturePipeline's `Dispatchers.IO` context, so the asset
             // read happens on IO (architecture line 473).
             verify = { frame -> container.geminiClient.verify(frame) },
+            // Epic 9 Story 9.1 — SerpAPI enrichment seams (code-review
+            // P1 — were defaulted to no-ops, so SerpAPI was dead code
+            // in production). Deferring lambdas for the same reason as
+            // `verify` — the `serpApiClient` lazy holds the derived
+            // OkHttp client (15 s callTimeout) and is force-warmed only
+            // when first enrichment fires inside Dispatchers.IO.
+            serpSearch = { query -> container.serpApiClient.search(query) },
+            shouldSkipSerp = { container.serpQuotaGate.shouldSkipSerp() },
+            onSerpQuotaExceeded = { container.serpQuotaGate.markQuotaExceeded() },
+            onSerpSuccess = { container.serpQuotaGate.resetQuotaGate() },
         )
 
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)

@@ -35,6 +35,13 @@
     <string name="history_empty_title">Pas encore de verdicts.</string>
     <string name="history_empty_subtitle">Long-press la bulle pour commencer.</string>
 
+    <!-- Epic 8 Story 8.1 — editorial header for the history screen.
+         Code-review F7+F19 (Group B) — `history_screen_subtitle_suffix`
+         deleted in favour of `R.plurals.history_screen_subtitle` ;
+         the "24 h" suffix was misleading (no rolling-window filter
+         is applied in the rendering site). -->
+    <string name="history_screen_title">Vérifications récentes</string>
+
     <!-- Story 4.2 — HistoryScreen empty-state glyph a11y (UX-DR18, NFR12). -->
     <string name="history_empty_glyph_content_description">Bulle VeriSphere</string>
 
@@ -53,4 +60,19 @@
     <string name="accessibility_explanation_body">VeriSphere lit l\'écran que tu vérifies — rien d\'autre. Pas de lecture en arrière-plan. Pas d\'actions automatiques. Désactivable à tout moment dans Settings.</string>
     <string name="accessibility_action_activate">Activer</string>
     <string name="accessibility_settings_unavailable">Cet appareil n\'expose pas l\'écran des permissions d\'accessibilité. Active VeriSphere via les Settings système.</string>
+
+    <!-- Epic 9 Story 9.2 — Detail panel restructure (SerpAPI cross-source). -->
+    <string name="detail_section_supplementary_info">Information supplémentaire</string>
+    <string name="detail_section_serp_synthesis">Synthèse Google</string>
+    <string name="detail_section_sources_combined">Sources</string>
+    <string name="detail_section_analyzed_text">Texte analysé</string>
+    <string name="detail_agreement_disagree">Sources contradictoires : Gemini et la recherche Google ne s\'accordent pas.</string>
+    <string name="detail_agreement_disagree_a11y">Avertissement : sources contradictoires</string>
+    <!-- Code-review F24 (Group B) — symmetric positive signal so the
+         user can distinguish "Gemini + Google agree" from "no SerpAPI
+         signal". Renders on the sage palette (concordance = positive). -->
+    <string name="detail_agreement_agree">Sources concordantes : Gemini et la recherche Google s\'accordent.</string>
+    <string name="detail_agreement_agree_a11y">Information : sources concordantes</string>
+    <string name="detail_analyzed_text_show">Afficher</string>
+    <string name="detail_analyzed_text_hide">Masquer</string>
 </resources>

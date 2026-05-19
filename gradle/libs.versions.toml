@@ -43,6 +43,11 @@ androidx-compose-material3 = { group = "androidx.compose.material3", name = "mat
 # BOM-managed; version flows from androidx-compose-bom above. R8 strips
 # unreachable icons aggressively — only the 2 used icons land in the APK.
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+# Epic 8 Story 8.1 — Downloadable Fonts (Google Fonts provider) for the
+# Wispr Flow inspired editorial typography (Figtree + EB Garamond). The
+# provider authority is GMS; first render of each FontFamily triggers a
+# one-time download (cached forever, no APK weight, offline after).
+androidx-compose-ui-text-google-fonts = { group = "androidx.compose.ui", name = "ui-text-google-fonts" }
 
 # Added by Story 1.1
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycleViewmodelCompose" }

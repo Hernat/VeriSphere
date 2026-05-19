@@ -77,6 +77,35 @@ val geminiApiKeyForBuildConfig: String = resolvedGeminiApiKey
     .replace("\\", "\\\\")
     .replace("\"", "\\\"")
 
+// ─── SERP_API_KEY resolution (Epic 9 Story 9.1) ──────────────────────────
+// Optional secondary fact-check source. Same lookup order as GEMINI_API_KEY
+// (local.properties → env var) but DOES NOT fail the build when missing —
+// SerpAPI is graceful-degradation per Epic 9 plan: empty key → pipeline
+// skips SerpAPI entirely + uses Gemini-only verdict. Contributors without
+// a SerpAPI account can build and run the app normally.
+val resolvedSerpApiKey: String = run {
+    val localPropsFile = rootProject.file("local.properties")
+    val fromLocalProps: String? = if (localPropsFile.exists()) {
+        FileInputStream(localPropsFile).use { stream ->
+            Properties().apply { load(stream) }
+                .getProperty("SERP_API_KEY")
+                ?.takeIf { it.isNotBlank() }
+        }
+    } else null
+
+    fromLocalProps
+        ?: System.getenv("SERP_API_KEY")?.takeIf { it.isNotBlank() }
+        ?: ""
+}.also { key ->
+    require(key.none { it == '\n' || it == '\r' }) {
+        "SERP_API_KEY contains a newline character — clean it up in local.properties."
+    }
+}
+
+val serpApiKeyForBuildConfig: String = resolvedSerpApiKey
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+
 // ─── RELEASE_KEYSTORE_* resolution (D2.10, D5.4, Story 7.3) ──────────────
 // CI populates four env vars from GitHub Secrets; `release.yml` decodes the
 // base64 keystore secret into `$RUNNER_TEMP/release.keystore` and exports
@@ -195,6 +224,10 @@ android {
         // Story 1.9 reads this from BuildConfig.GEMINI_API_KEY.
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKeyForBuildConfig\"")
 
+        // Epic 9 Story 9.1 — SerpAPI key (optional, empty = SerpAPI disabled).
+        // SerpApiClient reads this from BuildConfig.SERP_API_KEY.
+        buildConfigField("String", "SERP_API_KEY", "\"$serpApiKeyForBuildConfig\"")
+
         // Story 2.2 — toggles the AnchoredDetailPanel between the
         // edge-anchored override (false) and the stock M3 ModalBottomSheet
         // fallback (true). V1 default = true (UX spec line 719 Phase 1
@@ -311,6 +344,9 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     // Story 6.2 — Icons.Outlined.Info + Icons.Outlined.Close for UpdateBanner.
     implementation(libs.androidx.compose.material.icons.extended)
+    // Epic 8 Story 8.1 — Downloadable Fonts for Figtree + EB Garamond
+    // (VSTypography). GMS provider, cached after first download.
+    implementation(libs.androidx.compose.ui.text.google.fonts)
 
     // ─── Encrypted local storage (D1.6, NFR6) ───────────────────────────
     implementation(libs.androidx.security.crypto)

@@ -2,6 +2,8 @@ package com.verisphere.app.storage
 
 import com.verisphere.app.gemini.SourceCitation
 import com.verisphere.app.gemini.VerdictLabel
+import com.verisphere.app.serp.AgreementVerdict
+import com.verisphere.app.serp.SerpReference
 import kotlinx.serialization.Serializable
 
 /**
@@ -66,4 +68,14 @@ data class SessionRecord(
     val extractedClaim: String = "",
     val regionalBiasNote: String? = null,
     val injectionDetected: Boolean = false,
+    // Epic 9 Story 9.1 — SerpAPI cross-source enrichment. All 3 fields
+    // have defaults so legacy persisted records (pre-Epic-9) deserialise
+    // cleanly via SecureStorage's coerceInputValues = true; ignoreUnknownKeys
+    // = true config (same forward-compat pattern as Story 3.1's
+    // injectionDetected addition). When SerpAPI was unavailable (key
+    // missing, quota, network) these stay at defaults — pipeline policy
+    // is graceful degradation to Gemini-only verdict per Epic 9 plan.
+    val serpReferences: List<SerpReference> = emptyList(),
+    val serpMarkdown: String = "",
+    val agreement: AgreementVerdict = AgreementVerdict.Inconclusive,
 )

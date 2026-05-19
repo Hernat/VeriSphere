@@ -42,6 +42,7 @@ import com.verisphere.app.R
 import com.verisphere.app.bubble.BubbleState
 import com.verisphere.app.gemini.SourceCitation
 import com.verisphere.app.gemini.VerdictLabel
+import com.verisphere.app.gemini.stripVerdictPrefix
 import com.verisphere.app.storage.SessionRecord
 import com.verisphere.app.ui.theme.VeriSphereTheme
 import kotlin.math.roundToInt
@@ -113,8 +114,13 @@ fun FlashTooltip(
         label = "tooltipAlpha",
     )
 
+    // Epic 8 — defensive strip of any verdict prefix Gemini may have
+    // written into the headline (verdictLabel renders as a separate
+    // word above; the prefix is redundant + sometimes contradictory).
+    val cleanedHeadline = stripVerdictPrefix(headline, verdictLabel)
+
     val verdictContentDescription = stringResource(verdictContentDescriptionFor(verdictLabel)) +
-        ". " + headline
+        ". " + cleanedHeadline
 
     Row(
         modifier = modifier
@@ -170,7 +176,7 @@ fun FlashTooltip(
                     color = verdictTextColor,
                 )
                 Text(
-                    text = headline,
+                    text = cleanedHeadline,
                     style = MaterialTheme.typography.bodyMedium,
                     color = headlineColor,
                 )
@@ -236,10 +242,15 @@ private fun verdictContentDescriptionFor(label: VerdictLabel): Int = when (label
 
 @ColorRes
 internal fun verdictBackgroundFor(label: VerdictLabel): Int = when (label) {
-    VerdictLabel.TRUE -> R.color.vs_verdict_true
-    VerdictLabel.FALSE -> R.color.vs_verdict_false
-    VerdictLabel.DOUBTFUL -> R.color.vs_verdict_doubtful
-    VerdictLabel.NON_VERIFIABLE -> R.color.vs_verdict_non_verifiable
+    // Epic 8 Story 8.1 — soft pastel palette replaces the V1 saturated
+    // Google semantic palette. Same verdict semantics (TRUE/FALSE/
+    // DOUBTFUL/NON_VERIFIABLE), warmer/lower-saturation tones.
+    // Contrast pairings validated by WisprPaletteContrastTokensTest
+    // for both light + dark variants (≥ AA body 4.5:1).
+    VerdictLabel.TRUE -> R.color.vs_verdict_true_soft
+    VerdictLabel.FALSE -> R.color.vs_verdict_false_soft
+    VerdictLabel.DOUBTFUL -> R.color.vs_verdict_doubtful_soft
+    VerdictLabel.NON_VERIFIABLE -> R.color.vs_verdict_non_verifiable_soft
 }
 
 /**
@@ -262,10 +273,13 @@ internal fun verdictBackgroundFor(label: VerdictLabel): Int = when (label) {
  */
 @ColorRes
 internal fun verdictHeadlineColorFor(label: VerdictLabel): Int = when (label) {
-    VerdictLabel.TRUE -> R.color.vs_on_state_offline
-    VerdictLabel.FALSE -> R.color.vs_on_state_offline
-    VerdictLabel.DOUBTFUL -> R.color.vs_on_verdict_doubtful
-    VerdictLabel.NON_VERIFIABLE -> R.color.vs_on_verdict_non_verifiable
+    // Epic 8 Story 8.1 — Wispr soft-pastel on-colour pairings.
+    // Each token validated AA against its matching background by
+    // WisprPaletteContrastTokensTest (light + dark variants).
+    VerdictLabel.TRUE -> R.color.vs_on_verdict_true_soft
+    VerdictLabel.FALSE -> R.color.vs_on_verdict_false_soft
+    VerdictLabel.DOUBTFUL -> R.color.vs_on_verdict_doubtful_soft
+    VerdictLabel.NON_VERIFIABLE -> R.color.vs_on_verdict_non_verifiable_soft
 }
 
 /**
@@ -293,19 +307,24 @@ internal fun verdictHeadlineColorFor(label: VerdictLabel): Int = when (label) {
 @Composable
 @ReadOnlyComposable
 private fun verdictTextColorFor(label: VerdictLabel): Color = when (label) {
-    VerdictLabel.TRUE -> colorResource(R.color.vs_on_state_offline)
-    VerdictLabel.FALSE -> colorResource(R.color.vs_on_state_offline)
-    VerdictLabel.DOUBTFUL -> colorResource(R.color.vs_on_verdict_doubtful)
-    VerdictLabel.NON_VERIFIABLE -> colorResource(R.color.vs_on_verdict_non_verifiable)
+    // Epic 8 Story 8.1 — same soft-pastel on-colour pairings as
+    // verdictHeadlineColorFor. Verdict WORD and headline share the same
+    // background, so the same on-colour token applies to both.
+    VerdictLabel.TRUE -> colorResource(R.color.vs_on_verdict_true_soft)
+    VerdictLabel.FALSE -> colorResource(R.color.vs_on_verdict_false_soft)
+    VerdictLabel.DOUBTFUL -> colorResource(R.color.vs_on_verdict_doubtful_soft)
+    VerdictLabel.NON_VERIFIABLE -> colorResource(R.color.vs_on_verdict_non_verifiable_soft)
 }
 
 private const val MAX_WIDTH_FRACTION = 0.75f
 private const val TONAL_ELEVATION_DP = 4f
-private const val CORNER_RADIUS_DP = 8f
-private const val HORIZONTAL_PADDING_DP = 12f
-private const val VERTICAL_PADDING_DP = 8f
+// Epic 8 Story 8.1 — Wispr soft corners + generous padding + slower
+// editorial fade (8dp→16dp / 12dp→14dp / 300ms→500ms).
+private const val CORNER_RADIUS_DP = 16f
+private const val HORIZONTAL_PADDING_DP = 14f
+private const val VERTICAL_PADDING_DP = 10f
 private const val POINTER_SIZE_DP = 8f
-private const val TEXT_FADE_MS = 300
+private const val TEXT_FADE_MS = 500
 
 private const val VS_DOUBTFUL_TEXT_COLOR_ARGB = 0xFF1F1F1F.toInt()
 

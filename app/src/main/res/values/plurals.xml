@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Code-review F7 (Group B) — plural quantity resources for the
+    French-baseline V1 history screen subtitle. `dernières` / `dernière`
+    must agree with `records.size` ; `Pair(records.size, "dernières")`
+    string-concat rendered "1 dernières" which is ungrammatical.
+
+    Using Android's `quantityString` with the `getQuantityString(...)`
+    API auto-picks the correct plural form per locale.
+-->
+<resources>
+
+    <plurals name="history_screen_subtitle">
+        <!-- 0 verdicts -->
+        <item quantity="zero">Aucune vérification récente</item>
+        <!-- 1 verdict -->
+        <item quantity="one">%1$d dernière vérification</item>
+        <!-- 2-n verdicts -->
+        <item quantity="other">%1$d dernières vérifications</item>
+    </plurals>
+
+</resources>

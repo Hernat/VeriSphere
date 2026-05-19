@@ -47,36 +47,36 @@ class FlashTooltipContrastTokensTest {
         injectionDetected = true,
     )
 
-    // ----- (a) verdictHeadlineColorFor — UX Step 8 `onColor` pairing ---
+    // ----- (a) verdictHeadlineColorFor — Epic 8 soft-pastel on-colours
 
     @Test
-    fun `verdictHeadlineColorFor TRUE returns vs_on_state_offline`() {
+    fun `verdictHeadlineColorFor TRUE returns vs_on_verdict_true_soft`() {
         assertEquals(
-            R.color.vs_on_state_offline,
+            R.color.vs_on_verdict_true_soft,
             verdictHeadlineColorFor(VerdictLabel.TRUE),
         )
     }
 
     @Test
-    fun `verdictHeadlineColorFor FALSE returns vs_on_state_offline`() {
+    fun `verdictHeadlineColorFor FALSE returns vs_on_verdict_false_soft`() {
         assertEquals(
-            R.color.vs_on_state_offline,
+            R.color.vs_on_verdict_false_soft,
             verdictHeadlineColorFor(VerdictLabel.FALSE),
         )
     }
 
     @Test
-    fun `verdictHeadlineColorFor DOUBTFUL returns vs_on_verdict_doubtful`() {
+    fun `verdictHeadlineColorFor DOUBTFUL returns vs_on_verdict_doubtful_soft`() {
         assertEquals(
-            R.color.vs_on_verdict_doubtful,
+            R.color.vs_on_verdict_doubtful_soft,
             verdictHeadlineColorFor(VerdictLabel.DOUBTFUL),
         )
     }
 
     @Test
-    fun `verdictHeadlineColorFor NON_VERIFIABLE returns vs_on_verdict_non_verifiable`() {
+    fun `verdictHeadlineColorFor NON_VERIFIABLE returns vs_on_verdict_non_verifiable_soft`() {
         assertEquals(
-            R.color.vs_on_verdict_non_verifiable,
+            R.color.vs_on_verdict_non_verifiable_soft,
             verdictHeadlineColorFor(VerdictLabel.NON_VERIFIABLE),
         )
     }
@@ -138,18 +138,19 @@ class FlashTooltipContrastTokensTest {
     // ----- (c) Naming-convention invariant -----------------------------
 
     /**
-     * AC #5 (c) — every returned `@ColorRes` token must be one of the 3
+     * AC #5 (c) — every returned `@ColorRes` token must be one of the
      * documented `vs_on_*` semantic on-colour tokens. Catches accidental
      * regressions to `vs_on_background` / `vs_on_background_muted` / any
-     * non-`on_*` token (which would re-introduce the M3-tuned-for-surfaceVariant
-     * hazard the C13 fix was designed to eliminate).
+     * non-`on_*` token. Epic 8 Story 8.1 extends the allowed set to the
+     * 4 soft-pastel on-colours (one per verdict label).
      */
     @Test
     fun `verdict headline color always resolves to an on-colour semantic token`() {
         val allowed = setOf(
-            R.color.vs_on_state_offline,
-            R.color.vs_on_verdict_doubtful,
-            R.color.vs_on_verdict_non_verifiable,
+            R.color.vs_on_verdict_true_soft,
+            R.color.vs_on_verdict_false_soft,
+            R.color.vs_on_verdict_doubtful_soft,
+            R.color.vs_on_verdict_non_verifiable_soft,
         )
         VerdictLabel.entries.forEach { label ->
             val resolved = verdictHeadlineColorFor(label)
@@ -162,6 +163,9 @@ class FlashTooltipContrastTokensTest {
 
     @Test
     fun `failure headline color always resolves to an on-colour semantic token`() {
+        // FailureState helpers still route to V1 on-* tokens (Story 3.3 /
+        // 7.5 C13). Epic 8 Story 8.1 does not migrate the failure palette;
+        // see deferred-work for the V2 Wispr-failure-palette task.
         val allowed = setOf(
             R.color.vs_on_state_offline,
             R.color.vs_on_verdict_doubtful,

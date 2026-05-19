@@ -76,8 +76,11 @@ class DetailPanelContentUiTest {
         composeTestRule.onNodeWithText(VERDICT_WORD_TRUE).assertIsDisplayed()
         composeTestRule.onNodeWithText(record.headline).assertIsDisplayed()
 
-        // Section 2 — OCR section title + OCR card content.
-        composeTestRule.onNodeWithText(OCR_TITLE).assertIsDisplayed()
+        // Section 2 — Analyzed-text section : collapsed-by-default
+        // post-Epic 9 Story 9.2 (code-review F2 (Group B)). Title is
+        // visible ; tap the toggle to expand and reveal the OCR card.
+        composeTestRule.onNodeWithText(OCR_TITLE, substring = true).assertIsDisplayed()
+        composeTestRule.onNodeWithTag(TAG_ANALYZED_TEXT_TOGGLE).performClick()
         composeTestRule.onNodeWithText(record.ocrText).assertIsDisplayed()
         composeTestRule.onNodeWithTag(TAG_OCR_CARD).assertIsDisplayed()
 
@@ -187,10 +190,13 @@ class DetailPanelContentUiTest {
         // P8 — assert every visible text node from AC #11.b.1 (verdict word,
         // section titles, headline, OCR, padlock copy, Built with Gemini)
         // is still discoverable at fontScale 1.5f. NFR14 lock-in.
+        // Code-review F2 (Group B) — AnalyzedTextSection is collapsed
+        // by default ; tap the toggle to expand before asserting OCR.
         composeTestRule.onNodeWithText(VERDICT_WORD_TRUE).assertIsDisplayed()
-        composeTestRule.onNodeWithText(OCR_TITLE).assertIsDisplayed()
+        composeTestRule.onNodeWithText(OCR_TITLE, substring = true).assertIsDisplayed()
         composeTestRule.onNodeWithText(SOURCES_TITLE).assertIsDisplayed()
         composeTestRule.onNodeWithText(longHeadline).assertIsDisplayed()
+        composeTestRule.onNodeWithTag(TAG_ANALYZED_TEXT_TOGGLE).performClick()
         composeTestRule.onNodeWithText(longOcr).assertIsDisplayed()
         composeTestRule.onNodeWithText(BUILT_WITH_GEMINI).assertIsDisplayed()
         composeTestRule.onNodeWithText(PADLOCK_COPY).assertIsDisplayed()
@@ -289,12 +295,16 @@ private fun fixtureRecord(
 
 // Verdict word and copy strings — kept literal here so the assertions are
 // self-contained (no R.string lookup required from an Activity rule).
-// Story 7.5 C6 — V1 French baseline; verdict word stays English-as-
-// international-convention per UX-DR17 + Hernat decision 2026-05-19;
+// Epic 9 hotfix 2026-05-19 — verdict words moved to French baseline
+// (VRAI / FAUX / DOUTEUX / NON VÉRIFIABLE) reverting Story 7.5 C6's
+// "international convention" stance per user feedback.
 // BUILT_WITH_GEMINI stays English per FR14 attribution invariant
 // (Story 7.4 MS7 phrase pin per Google Gemini API attribution guidelines).
-private const val VERDICT_WORD_TRUE = "TRUE"
-private const val OCR_TITLE = "Texte lu"
+private const val VERDICT_WORD_TRUE = "VRAI"
+// Epic 9 Story 9.2 — section renamed + moved to bottom (collapsed).
+// Substring match used at call sites because the rendered text is
+// "Texte analysé — Afficher" (compound header).
+private const val OCR_TITLE = "Texte analysé"
 private const val SOURCES_TITLE = "Sources"
 private const val SOURCES_UNAVAILABLE_MSG = "Aucune source corroborante trouvée."
 private const val PADLOCK_COPY = "Personne d'autre ne le voit. C'est entre toi et nous."

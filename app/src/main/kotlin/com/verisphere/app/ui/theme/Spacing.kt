@@ -21,4 +21,13 @@ object VSSpacing {
     val space16: Dp = 16.dp
     val space24: Dp = 24.dp
     val space32: Dp = 32.dp
+
+    // Epic 8 Story 8.1 — editorial whitespace tokens. Wispr Flow's
+    // "generous spacing" pattern needs intermediate steps between
+    // the V1 scale and standalone hero margins. All still on the
+    // 4 dp baseline grid (4 / 8 / 12 / 16 / 20 / 24 / 28 / 32 / 40 / 48).
+    val space20: Dp = 20.dp
+    val space28: Dp = 28.dp
+    val space40: Dp = 40.dp
+    val space48: Dp = 48.dp
 }

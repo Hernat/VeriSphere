@@ -137,7 +137,9 @@ class MainActivityHistoryDetailTest {
         composeTestRule.onNodeWithTag(TAG_SOURCES_ROW).assertIsDisplayed()
         // The "What was read" section heading is rendered by the panel's
         // OcrSection; this also proves DetailPanelContent rendered.
-        composeTestRule.onNodeWithText(PANEL_OCR_HEADING).assertIsDisplayed()
+        // Epic 9 Story 9.2 — substring match because the rendered text is
+        // "Texte analysé — Afficher" (compound header in AnalyzedTextSection).
+        composeTestRule.onNodeWithText(PANEL_OCR_HEADING, substring = true).assertIsDisplayed()
 
         // FR17 regression guard (review patch P1) — the read-only panel
         // must NOT render a "Verify again" / "Refresh" button. Currently
@@ -267,11 +269,13 @@ class MainActivityHistoryDetailTest {
         private const val TAG_SOURCES_ROW = "vs_detail_sources_row"
 
         /**
-         * `R.string.detail_ocr_title` resolved value. Hardcoded to keep
-         * the test free of resource-context plumbing; the literal lives
-         * verbatim in `strings_verdict.xml` (line 35).
+         * Epic 9 Story 9.2 — section renamed and moved to bottom under
+         * "Texte analysé" header (collapsed by default ; the header
+         * itself remains visible). Hardcoded to keep the test free of
+         * resource-context plumbing ; the literal "Texte analysé" lives
+         * in `strings.xml` `detail_section_analyzed_text`.
          */
-        private const val PANEL_OCR_HEADING = "Texte lu"
+        private const val PANEL_OCR_HEADING = "Texte analysé"
 
         private const val EXPECTED_MATCHES_HISTORY_ONLY = 1
         private const val EXPECTED_MATCHES_PANEL_PLUS_HISTORY = 2

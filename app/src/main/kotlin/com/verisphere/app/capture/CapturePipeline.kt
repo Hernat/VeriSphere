@@ -4,6 +4,8 @@ import android.util.Log
 import com.verisphere.app.accessibility.VeriSphereAccessibilityService
 import com.verisphere.app.gemini.VerificationOutcome
 import com.verisphere.app.gemini.VerificationOutcome.Failure
+import com.verisphere.app.serp.AgreementScorer
+import com.verisphere.app.serp.SerpOutcome
 import com.verisphere.app.storage.RateLimitRepository
 import com.verisphere.app.util.tag
 import kotlinx.coroutines.CancellationException
@@ -11,6 +13,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -87,6 +91,17 @@ class CapturePipeline(
     // Story 1.9 deleted `synthesizeVerdict` so `clock` became dead code.
     // The `verify` lambda now produces the canonical timestamp inside
     // `GeminiClient.toSessionRecord` (`System.currentTimeMillis()`).
+
+    // Epic 9 Story 9.1 — SerpAPI cross-source enrichment seams. All
+    // 4 lambdas default to no-op / disabled so existing tests + the
+    // pipeline contract pre-Epic-9 keep working unchanged when SerpAPI
+    // is wired off (BuildConfig.SERP_API_KEY empty) or in JVM tests
+    // that do not exercise SerpAPI behaviour.
+    private val serpSearch: suspend (query: String) -> SerpOutcome =
+        { _ -> SerpOutcome.Failure.NotConfigured },
+    private val shouldSkipSerp: () -> Boolean = { false },
+    private val onSerpQuotaExceeded: () -> Unit = {},
+    private val onSerpSuccess: () -> Unit = {},
 ) {
 
     /**
@@ -203,20 +218,147 @@ class CapturePipeline(
         // verdict with the real Gemini call. The verify lambda routes
         // to [com.verisphere.app.gemini.GeminiClient.verify] which
         // returns a typed VerificationOutcome (never throws).
-        return verify(frame)
+        val geminiOutcome = verify(frame)
+
+        // Epic 9 Story 9.1 — chain SerpAPI cross-source enrichment after
+        // Gemini success. Failures fall through unchanged: the user gets
+        // the Gemini-only verdict, SerpAPI's silent absence is the right
+        // UX per Epic 9 plan ("graceful degradation").
+        return if (geminiOutcome is VerificationOutcome.Verdict) {
+            enrichWithSerp(geminiOutcome)
+        } else {
+            geminiOutcome
+        }
+    }
+
+    /**
+     * Epic 9 Story 9.1 — sequential SerpAPI enrichment.
+     *
+     * Quota gate first ([shouldSkipSerp]) — if a recent quota signal is
+     * still inside its cooldown window, skip SerpAPI entirely and return
+     * the Gemini verdict unchanged. Otherwise call [serpSearch] with the
+     * Gemini-derived `extractedClaim` (already stripped of social-media
+     * chrome by the system prompt), then map the [SerpOutcome] :
+     *   - Success → enrich record (references + markdown + agreement)
+     *               + clear quota gate via [onSerpSuccess]
+     *   - Failure.Quota → trip the gate via [onSerpQuotaExceeded] +
+     *                     return Gemini verdict unchanged
+     *   - other Failure → log + return Gemini verdict unchanged
+     *
+     * **Injection skip** (code-review DN2) — if Gemini flagged the OCR
+     * as injection-tainted, skip SERP entirely. The detail panel for
+     * `FailureState.PossibleInjection` should foreground the security
+     * warning, not distract with SERP references.
+     *
+     * **SERP timeout containment** (code-review P2) — the SerpAPI call
+     * is wrapped in [withTimeoutOrNull] so SERP-internal stalls map to
+     * a typed failure that returns the Gemini verdict unchanged, rather
+     * than propagating a [TimeoutCancellationException] up to the outer
+     * pipeline budget and discarding Gemini's successful work. The
+     * outer [CAPTURE_TIMEOUT] still bounds the whole pipeline as a
+     * structural backstop; the per-SERP budget [SERP_BUDGET] is the
+     * per-call ceiling.
+     *
+     * **Bounds on persisted SERP data** (code-review F15) — references
+     * are capped at [MAX_PERSISTED_REFS] and markdown truncated at
+     * [MAX_PERSISTED_MARKDOWN_CHARS] before the SessionRecord copy.
+     * Encrypted SharedPrefs is the persistence backend; an unbounded
+     * `List<SerpReference>` per record × 50 history records can balloon
+     * faster than the SharedPrefs sweet-spot.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun enrichWithSerp(
+        gemini: VerificationOutcome.Verdict,
+    ): VerificationOutcome {
+        if (gemini.record.injectionDetected) {
+            // Code-review DN2 — PossibleInjection UX foregrounds the
+            // security warning; SERP refs would distract.
+            Log.d(TAG, "injectionDetected=true — skip SerpAPI, Gemini-only verdict")
+            return gemini
+        }
+        if (shouldSkipSerp()) {
+            Log.d(TAG, "SerpQuotaGate active — skip SerpAPI, Gemini-only verdict")
+            return gemini
+        }
+
+        val query = gemini.record.extractedClaim
+        val outcome: SerpOutcome = try {
+            withTimeoutOrNull(SERP_BUDGET) { serpSearch(query) }
+                ?: SerpOutcome.Failure.Timeout
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            // SerpApiClient.search is documented as never-throws (single
+            // error funnel mirroring GeminiClient). This catch is the
+            // defensive backstop ; treat as silent failure.
+            Log.w(TAG, "SerpAPI threw unexpectedly", e)
+            return gemini
+        }
+
+        return when (outcome) {
+            is SerpOutcome.Success -> {
+                onSerpSuccess()
+                val cappedRefs = outcome.references.take(MAX_PERSISTED_REFS)
+                val cappedMarkdown = outcome.markdown.take(MAX_PERSISTED_MARKDOWN_CHARS)
+                val agreement = AgreementScorer.score(
+                    label = gemini.record.verdictLabel,
+                    markdown = cappedMarkdown,
+                )
+                Log.i(
+                    TAG,
+                    "SerpAPI OK (${outcome.engineUsed}) refs=${cappedRefs.size} " +
+                        "agreement=$agreement",
+                )
+                VerificationOutcome.Verdict(
+                    gemini.record.copy(
+                        serpReferences = cappedRefs,
+                        serpMarkdown = cappedMarkdown,
+                        agreement = agreement,
+                    ),
+                )
+            }
+            SerpOutcome.Failure.Quota -> {
+                onSerpQuotaExceeded()
+                Log.w(TAG, "SerpAPI quota exceeded — Gemini-only verdict, cooldown armed")
+                gemini
+            }
+            is SerpOutcome.Failure -> {
+                Log.w(TAG, "SerpAPI failed ($outcome) — Gemini-only verdict")
+                gemini
+            }
+        }
     }
 
     companion object {
         /**
          * The full pipeline budget: covers frame capture + the Gemini
-         * call. PRD NFR1 targets P95 ≤ ~30 s end-to-end with Search
-         * Grounding + Vision active (amended in Sprint Change 2026-05-18
-         * / Story 7.4 MS1; original `< 2 s` deferred to V2 contingent
-         * on Gemini Flash latency improvements OR `streamGenerateContent`
-         * migration); the 60 s ceiling is the backstop matching the
-         * OkHttp `callTimeout` (D3.8 amended).
+         * call + the SerpAPI enrichment. PRD NFR1 targets P95 ≤ ~30 s
+         * end-to-end with Search Grounding + Vision active (amended in
+         * Sprint Change 2026-05-18 / Story 7.4 MS1); the 80 s ceiling
+         * (code-review P2 — was 60 s) is the worst-case backstop
+         * matching Gemini's OkHttp `callTimeout = 60 s` (D3.8) PLUS the
+         * SerpAPI [SERP_BUDGET] of 15 s plus a 5 s structural slack so
+         * a successful-but-late Gemini verdict is not discarded by a
+         * SERP timeout.
          */
-        val CAPTURE_TIMEOUT = 60.seconds // Per architecture D3.8 (Sprint Change 2026-05-18 / Story 7.4 MS1 formalised the 5/45/60 + thinkingBudget=0 posture; previous 20s ceiling re-eligible in V2 contingent on Gemini Flash latency improvements OR streamGenerateContent migration)
+        val CAPTURE_TIMEOUT: Duration = 80.seconds
+
+        /**
+         * Per-SerpAPI-call wall-clock ceiling enforced by [withTimeoutOrNull]
+         * inside [enrichWithSerp] (code-review P2 — was unenforced; the
+         * `SerpApiClient.CALL_TIMEOUT_SECONDS = 15` constant existed but
+         * was never wired to OkHttp). Distinct from the SerpApiClient's
+         * own OkHttp `callTimeout` ; both apply belt-and-braces.
+         */
+        val SERP_BUDGET: Duration = 15.seconds
+
+        /**
+         * Persistence guards (code-review F15) — keep encrypted
+         * SharedPrefs payload bounded across 50 history records.
+         * Numbers chosen so a worst-case record stays ≤ ~4 KB.
+         */
+        private const val MAX_PERSISTED_REFS: Int = 6
+        private const val MAX_PERSISTED_MARKDOWN_CHARS: Int = 2_000
 
         private val TAG = tag("CapturePipeline")
     }

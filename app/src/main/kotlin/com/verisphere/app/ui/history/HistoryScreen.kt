@@ -36,7 +36,9 @@ import com.verisphere.app.gemini.SourceCitation
 import com.verisphere.app.gemini.VerdictLabel
 import com.verisphere.app.storage.SessionRecord
 import com.verisphere.app.ui.banner.UpdateBanner
+import com.verisphere.app.ui.theme.VSPalette
 import com.verisphere.app.ui.theme.VSSpacing
+import com.verisphere.app.ui.theme.VSTypography
 import com.verisphere.app.ui.theme.VeriSphereTheme
 
 /**
@@ -262,10 +264,48 @@ private fun ContentList(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(
-            horizontal = VSSpacing.space16,
-            vertical = VSSpacing.space8,
+            start = VSSpacing.space16,
+            end = VSSpacing.space16,
+            top = VSSpacing.space8,
+            bottom = VSSpacing.space24,
         ),
+        verticalArrangement = Arrangement.spacedBy(VSSpacing.space8),
     ) {
+        // Epic 8 Story 8.1 — editorial header (EB Garamond title +
+        // Figtree tracked subtitle). Lives inside LazyColumn so it
+        // scrolls with the list (Wispr editorial header pattern).
+        item(key = "history-header") {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = VSSpacing.space8,
+                        end = VSSpacing.space8,
+                        top = VSSpacing.space24,
+                        bottom = VSSpacing.space16,
+                    ),
+                verticalArrangement = Arrangement.spacedBy(VSSpacing.space8),
+            ) {
+                Text(
+                    text = stringResource(R.string.history_screen_title),
+                    style = VSTypography.headlineSerif,
+                    color = VSPalette.ink,
+                )
+                // Code-review F7 (Group B) — plurals.xml drives the
+                // grammatical agreement of `dernière(s) vérification(s)`
+                // with `records.size`. F19 — the misleading "· 24 h"
+                // suffix was dropped (no rolling-window filter exists).
+                Text(
+                    text = androidx.compose.ui.res.pluralStringResource(
+                        id = R.plurals.history_screen_subtitle,
+                        count = records.size,
+                        records.size,
+                    ),
+                    style = VSTypography.labelTrackedSans.copy(),
+                    color = VSPalette.inkSoft,
+                )
+            }
+        }
         // Story 4.1 Critical Dev Note #3 invariant — the `key = { it.id }`
         // MUST stay on the items() call (not inside HistoryItemRow) so
         // Compose tracks row identity across reorderings.

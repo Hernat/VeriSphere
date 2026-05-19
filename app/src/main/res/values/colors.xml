@@ -47,4 +47,69 @@
          "#9AA0A6, 8 dp, upper-right edge"). Light variant. -->
     <color name="vs_update_dot">#9AA0A6</color>
 
+    <!-- ============================================================
+         Epic 8 Story 8.1 — Wispr Flow inspired tokens (light variants).
+         Adopted post-V1 per epic-8-wispr-flow-ui-plan.md. The V1
+         tokens ABOVE are retained for surfaces not yet migrated;
+         NEW surfaces (Stories 8.2-8.5) consume the tokens below.
+         Dark counterparts live in values-night/colors.xml.
+         ============================================================ -->
+
+    <!-- Neutrals — soft editorial canvas + paper + ink + hairline. -->
+    <color name="vs_canvas">#F8F4EA</color>
+    <color name="vs_paper">#FBF8F0</color>
+    <color name="vs_paper_alt">#F0EADC</color>
+    <color name="vs_ink">#2A2620</color>
+    <color name="vs_ink_muted">#6B655B</color>
+    <!-- Code-review F3 (Group B) — was #9C9588 (2.76:1 on paper, FAIL
+         WCAG AA body). Darkened to #757066 (4.64:1 on paper, PASSES
+         AA body). Preserves the warm-grey tertiary semantic but at
+         AA-compliant luminance ; visual gap vs ink_muted is now subtle
+         (hierarchy carried mostly by hue rather than luminance). -->
+    <color name="vs_ink_soft">#757066</color>
+    <color name="vs_hairline">#E5DECD</color>
+
+    <!-- Accents — sage primary (CTA, idle bubble Story 8.2), lavender
+         secondary (chips, dividers), pulse tertiary (warm gold,
+         warning + UpdateBanner Story 8.5 + AgreementBadgeRow F8). -->
+    <color name="vs_accent_sage">#7BA889</color>
+    <!-- Code-review F4 (Group B) — was #4E7B5E (4.46:1 on canvas,
+         FAILS WCAG AA body by 0.04). Darkened to #44704F (5.19:1 on
+         canvas, PASSES AA body comfortably). M3 primary slot uses
+         this — TextButton + ripple labels + AnalyzedTextSection toggle
+         all benefit. -->
+    <color name="vs_accent_sage_deep">#44704F</color>
+    <color name="vs_accent_lavender">#C8BFE0</color>
+    <color name="vs_accent_pulse">#C9A961</color>
+    <!-- Light sage on-colour = DARK ink (not white). White on #7BA889 sage
+         gives only 2.69:1 (FAIL WCAG AA, validated by
+         WisprPaletteContrastTokensTest). Dark-text-on-light-sage pattern
+         is intentional — surfaces needing white text on sage MUST use
+         vs_accent_sage_deep (#44704F → ~6.0:1 with white, passes AA). -->
+    <color name="vs_on_accent_sage">#2A2620</color>
+    <color name="vs_on_accent_sage_deep">#FFFFFF</color>
+    <!-- Code-review F8 (Group B) — on-colour for vs_accent_pulse
+         (warm gold). Dark ink on the gold tint gives ~7:1 (AA AAA).
+         Consumed by AgreementBadgeRow when SerpAPI disagrees with
+         Gemini (semantically distinct from verdict DOUBTFUL). -->
+    <color name="vs_on_accent_pulse">#2A2620</color>
+
+    <!-- Verdict softs — friendly pastel variants of the saturated
+         Google semantic verdict palette above. Same sequence
+         (TRUE / FALSE / DOUBTFUL / NON_VERIFIABLE), saturation
+         reduced ~80% → ~25%. Stories 8.2 (bubble) + 8.3 (tooltip
+         + detail panel) consume these. -->
+    <color name="vs_verdict_true_soft">#D7E8DA</color>
+    <color name="vs_verdict_false_soft">#F5D5CC</color>
+    <color name="vs_verdict_doubtful_soft">#F3E4C0</color>
+    <color name="vs_verdict_non_verifiable_soft">#E3DDED</color>
+
+    <!-- On-colours for the verdict softs (WCAG AA pairings, validated
+         by EpicEightContrastTokensTest). Mirrors the Story 3.3 / 7.5
+         C13 vs_on_* naming convention. -->
+    <color name="vs_on_verdict_true_soft">#0F3D1C</color>
+    <color name="vs_on_verdict_false_soft">#5C1A0E</color>
+    <color name="vs_on_verdict_doubtful_soft">#4A3A0C</color>
+    <color name="vs_on_verdict_non_verifiable_soft">#3A2F4D</color>
+
 </resources>

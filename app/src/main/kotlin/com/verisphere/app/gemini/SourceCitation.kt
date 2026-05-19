@@ -37,4 +37,13 @@ data class SourceCitation(
     val url: String,
     val publisher: String,
     val dateYearMonth: String? = null,
+    /**
+     * Code-review F11 (Group B) — optional per-source snippet. Gemini
+     * Search Grounding does NOT emit snippets ; SerpAPI does (1-2
+     * sentence outlet summary). Field is nullable so Gemini-sourced
+     * citations stay shape-compatible while [fuseSources] preserves the
+     * SerpAPI snippet at the UI boundary. Renderer ([SourceLinkChip])
+     * is free to show or hide based on chip-row vs detail-list mode.
+     */
+    val snippet: String? = null,
 )

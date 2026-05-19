@@ -12,11 +12,17 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Story 1.10 — FlashTooltip verdict word strings (UX-DR17, UX spec § Copy Guidelines).
-         Reused by Story 2.3 DetailPanelContent for the verdict row. -->
-    <string name="flash_verdict_true">TRUE</string>
-    <string name="flash_verdict_false">FALSE</string>
-    <string name="flash_verdict_doubtful">DOUBTFUL</string>
-    <string name="flash_verdict_non_verifiable">NON-VERIFIABLE</string>
+         Reused by Story 2.3 DetailPanelContent for the verdict row.
+         Epic 9 hotfix 2026-05-19 — French baseline ON the verdict words
+         themselves (Story 7.5 C6 originally kept the labels English as
+         "international convention", reverted post-Epic-9 per user
+         feedback : labels are now FR-first to match the rest of the
+         baseline). Internal enum values [VerdictLabel.TRUE/FALSE/...]
+         and JSON wire format stay English per architecture D3.4 schema. -->
+    <string name="flash_verdict_true">VRAI</string>
+    <string name="flash_verdict_false">FAUX</string>
+    <string name="flash_verdict_doubtful">DOUTEUX</string>
+    <string name="flash_verdict_non_verifiable">NON VÉRIFIABLE</string>
 
     <!-- Story 1.10 — Verdict-state contentDescriptions for TalkBack (UX-DR18, NFR12).
          Reused by Story 2.3 DetailPanelContent for the verdict-row merged-semantics announcement.

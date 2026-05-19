@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Base64
 import androidx.annotation.VisibleForTesting
 import com.verisphere.app.gemini.GeminiClient
+import com.verisphere.app.serp.SerpApiClient
+import com.verisphere.app.serp.SerpQuotaGate
 import com.verisphere.app.storage.HistoryRepository
 import com.verisphere.app.storage.HistoryRepositoryImpl
 import com.verisphere.app.storage.RateLimitRepository
@@ -118,6 +120,37 @@ class AppContainer(private val applicationContext: Context) {
             systemPromptProvider = { systemPrompt },
             base64Encoder = { bytes -> Base64.encodeToString(bytes, Base64.NO_WRAP) },
         )
+    }
+
+    /**
+     * Epic 9 Story 9.1 — single talker to `serpapi.com` for the
+     * cross-source fact-check enrichment layer. Boundary discipline
+     * (architecture line 752) mirrors [geminiClient].
+     *
+     * Derives a SerpAPI-specific OkHttp client from the shared one
+     * with the documented [SerpApiClient.CALL_TIMEOUT_SECONDS] = 15 s
+     * `callTimeout` (code-review P2 — was silently inheriting the
+     * shared 60 s budget, breaking the documented per-call ceiling and
+     * compounding pipeline-level latency). Reuses the underlying
+     * dispatcher / connection pool / DNS via [OkHttpClient.newBuilder].
+     *
+     * Reads `BuildConfig.SERP_API_KEY` via the client's default
+     * parameter; empty key → graceful disable.
+     */
+    val serpApiClient: SerpApiClient by lazy {
+        val serpHttpClient = httpClient.newBuilder()
+            .callTimeout(SerpApiClient.CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .build()
+        SerpApiClient(httpClient = serpHttpClient)
+    }
+
+    /**
+     * Epic 9 Story 9.1 — in-memory throttle that bypasses SerpAPI for
+     * 15 minutes after a quota-exhausted signal. Singleton so the
+     * cooldown persists across pipeline calls within the process.
+     */
+    val serpQuotaGate: SerpQuotaGate by lazy {
+        SerpQuotaGate()
     }
 
     /**
