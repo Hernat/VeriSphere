@@ -45,6 +45,7 @@ import com.verisphere.app.gemini.SourceCitation
 import com.verisphere.app.gemini.VerdictLabel
 import com.verisphere.app.serp.AgreementVerdict
 import com.verisphere.app.serp.SerpReference
+import com.verisphere.app.serp.sanitizeSerpMarkdown
 import com.verisphere.app.storage.SessionRecord
 import com.verisphere.app.ui.theme.VSPalette
 import com.verisphere.app.ui.theme.VSSpacing
@@ -264,7 +265,12 @@ private fun SupplementaryInfoSection(
     regionalBiasNote: String?,
 ) {
     val hasContextLines = contextLines.any { it.isNotBlank() }
-    val hasSerp = serpMarkdown.isNotBlank()
+    // Epic 9 hotfix 2026-05-19 — sanitize the raw SerpAPI markdown
+    // (tables, backslash-escapes, References block, citation markers) into
+    // clean plain text. remember() keyed on the raw payload so the
+    // (cheap) regex pipeline isn't re-run on every recomposition.
+    val cleanedSerpMarkdown = remember(serpMarkdown) { sanitizeSerpMarkdown(serpMarkdown) }
+    val hasSerp = cleanedSerpMarkdown.isNotBlank()
     val hasBias = !regionalBiasNote.isNullOrBlank()
     if (!hasContextLines && !hasSerp && !hasBias) return
 
@@ -296,7 +302,7 @@ private fun SupplementaryInfoSection(
                     color = VSPalette.inkSoft,
                 )
                 Text(
-                    text = serpMarkdown,
+                    text = cleanedSerpMarkdown,
                     style = VSTypography.bodySans,
                     color = VSPalette.inkMuted,
                 )

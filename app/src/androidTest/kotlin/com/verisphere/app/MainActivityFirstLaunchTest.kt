@@ -210,10 +210,10 @@ class MainActivityFirstLaunchTest {
     private fun clearOnboardingFlags() {
         val storage = appContainer().secureStorage
         // Story 5.2 code-review P15 (DN1) — `KEY_FIRST_LAUNCH_COMPLETED`
-        // was removed via YAGNI cleanup. Only two onboarding flags
-        // persist in V1.
+        // was removed via YAGNI cleanup ; `KEY_NOTIFICATION_PERMISSION_ASKED`
+        // dropped 2026-05-19 alongside the notification-gate removal.
+        // Only the tutorial flag persists in V1 onboarding.
         storage.clear(OnboardingOrchestrator.KEY_TUTORIAL_SEEN)
-        storage.clear(OnboardingOrchestrator.KEY_NOTIFICATION_PERMISSION_ASKED)
     }
 
     // Story 4.4 D7 pattern: resolve string literals from the actual

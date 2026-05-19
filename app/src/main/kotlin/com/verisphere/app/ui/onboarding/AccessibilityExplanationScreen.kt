@@ -1,6 +1,7 @@
 package com.verisphere.app.ui.onboarding
 
 import android.content.res.Configuration
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
@@ -75,17 +78,26 @@ fun AccessibilityExplanationScreen(
         ) {
             Spacer(modifier = Modifier.height(VSSpacing.space40))
 
-            // Sage rounded-square icon — Wispr-style brand glyph.
+            // Sage rounded-square frame containing the VeriSphere logo
+            // ([R.drawable.logo_vs]) — same brand mark used by the
+            // launcher icon adaptive foreground + the onboarding
+            // tutorial sage frame.
             Surface(
                 modifier = Modifier.size(72.dp),
                 shape = RoundedCornerShape(20.dp),
                 color = VSPalette.accentSage.copy(alpha = 0.18f),
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "◐",
-                        style = VSTypography.displaySerif,
-                        color = VSPalette.accentSageDeep,
+                    // Logo round-clip 2026-05-19 — clipped to a 14 dp
+                    // rounded square so the source PNG's white corners
+                    // mirror the parent sage frame's 20 dp roundedness.
+                    // 14 / 48 ≈ 20 / 72, same ratio as the parent.
+                    Image(
+                        painter = painterResource(R.drawable.logo_vs),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(14.dp)),
                     )
                 }
             }

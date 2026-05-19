@@ -1,7 +1,5 @@
 package com.verisphere.app.onboarding
 
-import android.os.Build
-
 /**
  * Story 5.2 — first-launch detection + permission-orchestration logic
  * centralized in one testable class.
@@ -21,17 +19,13 @@ import android.os.Build
  * `AppContainer`. JVM tests pass any pair of pure-Kotlin lambdas (e.g.
  * a `MutableMap<String, Boolean>` backing).
  *
- * **Three persisted flags** (all `SecureStorage.readBoolean` /
+ * **Two persisted flags** (all `SecureStorage.readBoolean` /
  * `writeBoolean`, default `false`):
  *
  *  - `tutorial_seen` — set on `OnboardingTutorialOverlay.onComplete`
  *    (Card 4 "Got it") OR `onSkip` (Cards 2-4 "Skip"). Single-show
  *    invariant per AC #9 / CDN #4 (UX spec section 6 "Once skipped or
  *    completed, never re-shown").
- *  - `notification_permission_asked` — set in the
- *    `ActivityResultContracts.RequestPermission` callback regardless
- *    of grant/deny outcome (CDN #6). Suppresses re-prompting per
- *    Android 13+ runtime-permission contract (architecture D2.6).
  *  - `battery_optimization_prompted` (Story 5.3 AR26 / D5.8) — set
  *    when the [BatteryOptimizationBottomSheet] is dismissed via any
  *    path (scrim tap / swipe-down / Back / primary CTA). Single-show
@@ -39,6 +33,10 @@ import android.os.Build
  *    actually disabled optimisation"). Only relevant on hostile OEMs
  *    (Story 5.3 HOSTILE_OEMS const); on non-hostile devices the flag
  *    is never written.
+ *
+ * The third Story-5.2 flag, `notification_permission_asked`, was
+ * removed 2026-05-19 alongside the notification-gate cleanup (see the
+ * "POST_NOTIFICATIONS removed from the gate" section below).
  *
  * **Code-review YAGNI decision (DN1, 2026-05-16)**: the originally-specified
  * `first_launch_completed` "master gate" flag was removed because nothing
@@ -50,22 +48,26 @@ import android.os.Build
  * `tutorialSeen && all-permissions-granted` at call time, or
  * re-introduced with an actual consumer.
  *
- * **Service-start gate** ([canStartBubbleService]) — the ALL THREE
- * AND-condition required to start `BubbleOverlayService` (AC #4,
- * CDN #2, architecture D5.13 + D2.11):
+ * **Service-start gate** ([canStartBubbleService]) — the AND-condition
+ * required to start `BubbleOverlayService`:
  *
  *     canDrawOverlays
- *         AND (Build.VERSION.SDK_INT < 33 OR POST_NOTIFICATIONS granted)
  *         AND isAccessibilityServiceEnabled
  *
  * Exposed as a `companion object` function because it depends on no
- * stored state — pure boolean algebra parameterized on the runtime
- * gate values + API level.
+ * stored state — pure boolean algebra parameterized on the runtime gate
+ * values.
  *
- * **API-level injection**: [canStartBubbleService] accepts `apiLevel: Int`
- * as a parameter with `Build.VERSION.SDK_INT` default so JVM unit tests
- * can simulate API 32 vs API 33+ without Robolectric. Production callers
- * omit the argument.
+ * **POST_NOTIFICATIONS removed from the gate** (2026-05-19 — per Hernat
+ * post-Epic-9 product decision): the runtime notification permission is
+ * no longer mandatory. The foreground-service notification is silently
+ * suppressed when the OS hasn't granted POST_NOTIFICATIONS, but the
+ * service itself continues to run and the bubble overlay still
+ * functions. Users who want the persistent notification can grant it
+ * via system Settings → Apps → VeriSphere → Notifications. The
+ * `POST_NOTIFICATIONS` manifest declaration is retained so that an
+ * eventual opt-in surface can request the permission without a manifest
+ * bump.
  *
  * Stateless within the class — no fields besides the two lambdas; all
  * persisted state lives behind the seam. Safe to call from any thread;
@@ -84,13 +86,6 @@ class OnboardingOrchestrator(
 
     fun markTutorialSeen() {
         writeBoolean(KEY_TUTORIAL_SEEN, true)
-    }
-
-    fun isNotificationPermissionAsked(): Boolean =
-        readBoolean(KEY_NOTIFICATION_PERMISSION_ASKED, false)
-
-    fun markNotificationPermissionAsked() {
-        writeBoolean(KEY_NOTIFICATION_PERMISSION_ASKED, true)
     }
 
     /**
@@ -114,23 +109,16 @@ class OnboardingOrchestrator(
 
     companion object {
         const val KEY_TUTORIAL_SEEN: String = "tutorial_seen"
-        const val KEY_NOTIFICATION_PERMISSION_ASKED: String = "notification_permission_asked"
         const val KEY_BATTERY_OPTIMIZATION_PROMPTED: String = "battery_optimization_prompted"
 
         /**
-         * Pure-function form of the AC #4 / CDN #2 service-start gate.
-         * Exposed as a companion-object function so JVM tests can call it
-         * without instantiating the class.
+         * Pure-function form of the service-start gate. Exposed as a
+         * companion-object function so JVM tests can call it without
+         * instantiating the class.
          */
         fun canStartBubbleService(
             overlayGranted: Boolean,
-            notificationGranted: Boolean,
             accessibilityEnabled: Boolean,
-            apiLevel: Int = Build.VERSION.SDK_INT,
-        ): Boolean = overlayGranted &&
-            (apiLevel < API_LEVEL_RUNTIME_NOTIFICATIONS || notificationGranted) &&
-            accessibilityEnabled
-
-        const val API_LEVEL_RUNTIME_NOTIFICATIONS: Int = 33
+        ): Boolean = overlayGranted && accessibilityEnabled
     }
 }

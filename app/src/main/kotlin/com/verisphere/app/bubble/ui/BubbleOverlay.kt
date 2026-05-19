@@ -12,6 +12,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -43,6 +44,7 @@ import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -274,10 +276,22 @@ fun BubbleOverlay(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        text = "G",
-                        style = MaterialTheme.typography.headlineMedium.copy(fontSize = 24.sp),
-                        color = MaterialTheme.colorScheme.onPrimary,
+                    // Logo refonte 2026-05-19 + 2026-05-19 round-clip —
+                    // the brand PNG ships on a white square background,
+                    // so without `clip(CircleShape)` the square corners
+                    // poke past the circular bubble's silhouette and
+                    // produce visible white wedges. Clipping the inner
+                    // Image to the parent Surface's circle makes the
+                    // logo's outline follow the container. Sized to
+                    // ~86 % of the 56 dp bubble (48 dp) so the bubble's
+                    // sage ring stays readable around the white logo
+                    // disc.
+                    Image(
+                        painter = painterResource(R.drawable.logo_vs),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(BUBBLE_LOGO_DIAMETER_DP)
+                            .clip(CircleShape),
                     )
                 }
             }
@@ -717,6 +731,13 @@ private fun isInsideBubbleCircle(
 
 // UX-DR4 spacing token (56 dp).
 private val BUBBLE_DIAMETER_DP = 56.dp
+
+// Logo refonte 2026-05-19 + round-clip — inner logo size inside the
+// 56 dp bubble. 48 / 56 ≈ 0.86 leaves a thin ~4 dp ring of the bubble's
+// sage surface visible around the circular-clipped white logo disc.
+// Without the round clip the source PNG's square white background poked
+// through the bubble's circular silhouette (Hernat 2026-05-19 screenshot).
+private val BUBBLE_LOGO_DIAMETER_DP = 48.dp
 
 // 56 dp visible bubble + 24 dp halo on each side = 104 dp window.
 private val BUBBLE_HALO_DIAMETER_DP = 104.dp

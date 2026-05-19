@@ -204,7 +204,6 @@ class MainActivityBatteryOptimizationTest {
     private fun clearOnboardingFlags() {
         val storage = appContainer().secureStorage
         storage.clear(OnboardingOrchestrator.KEY_TUTORIAL_SEEN)
-        storage.clear(OnboardingOrchestrator.KEY_NOTIFICATION_PERMISSION_ASKED)
         storage.clear(OnboardingOrchestrator.KEY_BATTERY_OPTIMIZATION_PROMPTED)
     }
 

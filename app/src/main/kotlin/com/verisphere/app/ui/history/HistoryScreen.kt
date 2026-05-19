@@ -1,6 +1,7 @@
 package com.verisphere.app.ui.history
 
 import android.content.res.Configuration
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,12 +25,15 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.verisphere.app.R
 import com.verisphere.app.gemini.SourceCitation
@@ -225,19 +229,21 @@ private fun EmptyPlaceholder(modifier: Modifier = Modifier) {
 
 /**
  * Story 4.2 — empty-state visual anchor mirroring the production
- * `BubbleOverlay`'s idle look (Compose-first per Story 1.7;
- * `R.drawable.bubble_idle.xml` in architecture line 692 is aspirational
- * and intentionally not created — see spec Critical Dev Note #3).
- * 56 dp circle, `surfaceVariant` fill, centred "G" glyph in
- * `headlineSmall`.
+ * `BubbleOverlay`'s idle look. 56 dp circle, `surfaceVariant` fill,
+ * centred VeriSphere logo ([R.drawable.logo_vs]) at ~36 dp so a thin
+ * ring of the surface tint is visible around it.
+ *
+ * Logo refonte 2026-05-19 — replaced the literal "G" Text glyph with
+ * the brand PNG when the logo asset landed in `drawable-nodpi/`. The
+ * sibling sage frames in [com.verisphere.app.ui.onboarding] use the
+ * same logo so onboarding ↔ steady-state stay visually consistent.
  */
 @Composable
 private fun EmptyBubbleGlyph(modifier: Modifier = Modifier) {
     val a11yLabel = stringResource(R.string.history_empty_glyph_content_description)
     // Patch P7 (code review 2026-05-14) — mergeDescendants = true so the
-    // decorative "G" Text inside is folded into the parent Surface's
-    // contentDescription, preventing TalkBack from double-announcing
-    // ("VeriSphere bubble" + literal "G").
+    // decorative inner Image is folded into the parent Surface's
+    // contentDescription, preventing TalkBack from double-announcing.
     Surface(
         modifier = modifier
             .size(HistoryItemRowDefaults.BubbleGlyphSize)
@@ -247,9 +253,16 @@ private fun EmptyBubbleGlyph(modifier: Modifier = Modifier) {
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text(
-                text = "G",
-                style = MaterialTheme.typography.headlineSmall,
+            // Logo round-clip 2026-05-19 — same rationale as BubbleOverlay :
+            // the source PNG's white square background would otherwise
+            // poke past the circular Surface's silhouette. Sized at 48 dp
+            // inside the 56 dp bubble to leave a thin sage ring visible.
+            Image(
+                painter = painterResource(R.drawable.logo_vs),
+                contentDescription = null,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape),
             )
         }
     }

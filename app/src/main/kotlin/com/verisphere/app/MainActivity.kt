@@ -1,11 +1,9 @@
 package com.verisphere.app
 
-import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
@@ -18,7 +16,6 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.VisibleForTesting
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
@@ -31,7 +28,6 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.verisphere.app.accessibility.VeriSphereAccessibilityService
@@ -115,16 +111,13 @@ class MainActivity : ComponentActivity() {
     private var overlayGranted: Boolean by mutableStateOf(false)
     private var accessibilityServiceEnabled: Boolean by mutableStateOf(false)
 
-    // Story 5.2 — first-launch + permission orchestration state.
-    // `notificationGranted` flips when ContextCompat re-checks
-    // POST_NOTIFICATIONS on API 33+ (always true on API < 33 since the
-    // permission is install-time-granted on older OS releases). The
-    // tutorial / asked flags survive cold-start via SecureStorage and
-    // are seeded asynchronously in onCreate (CDN #8 — first-access
-    // Keystore stall lives on Dispatchers.IO).
-    private var notificationGranted: Boolean by mutableStateOf(true)
+    // Story 5.2 — first-launch + permission orchestration state. The
+    // tutorial flag survives cold-start via SecureStorage and is seeded
+    // synchronously in onCreate per CDN #6. POST_NOTIFICATIONS state /
+    // ask-flag fields were removed 2026-05-19 alongside the notification
+    // gate (the permission is now optional ; see [OnboardingOrchestrator]
+    // KDoc).
     private var tutorialSeen: Boolean by mutableStateOf(false)
-    private var notificationPermissionAsked: Boolean by mutableStateOf(false)
 
     // Story 5.3 — hostile-OEM battery-optimisation prompt single-show
     // flag (AR26, D5.8). Synchronously seeded in onCreate per CDN #6
@@ -159,39 +152,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var secureStorage: SecureStorage
     private lateinit var orchestrator: OnboardingOrchestrator
 
-    /**
-     * Story 5.2 — POST_NOTIFICATIONS runtime-permission launcher (API
-     * 33+). MUST be initialized at class scope per CDN #7: AndroidX
-     * Activity Result API requires `registerForActivityResult` to be
-     * called before the Activity reaches `STARTED` lifecycle state,
-     * which happens between `onCreate` return and `onStart`. A
-     * property initializer is the canonical safe site.
-     */
-    private val notificationPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        // CDN #6 — write the "asked" flag regardless of the user's
-        // grant/deny choice. The flag captures that the OS dialog was
-        // shown, not what the user picked. Subsequent onResume re-checks
-        // will pick up `notificationGranted` from the actual permission
-        // state via ContextCompat.checkSelfPermission.
-        //
-        // Story 5.2 code-review P7 — the SecureStorage write is wrapped
-        // in `NonCancellable + Dispatchers.IO` because the activity may
-        // be destroyed between the launcher callback firing and the
-        // write completing (lifecycleScope cancellation surface).
-        // NonCancellable matches the symmetric P4 pattern used by
-        // `onTutorialComplete` / `onTutorialSkip` for the critical
-        // single-write flag persistence.
-        notificationGranted = granted
-        notificationPermissionAsked = true
-        lifecycleScope.launch {
-            withContext(NonCancellable + Dispatchers.IO) {
-                orchestrator.markNotificationPermissionAsked()
-            }
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -204,7 +164,6 @@ class MainActivity : ComponentActivity() {
 
         overlayGranted = Settings.canDrawOverlays(this)
         accessibilityServiceEnabled = isAccessibilityServiceEnabled()
-        notificationGranted = checkNotificationPermission()
         resolvePendingDetailSession(intent)
 
         // Story 5.2 code-review P1 — seed the SecureStorage-backed flags
@@ -219,10 +178,10 @@ class MainActivity : ComponentActivity() {
         // `readBoolean` calls do not change the budget materially and
         // eliminate the race window entirely.
         tutorialSeen = orchestrator.isTutorialSeen()
-        notificationPermissionAsked = orchestrator.isNotificationPermissionAsked()
         // Story 5.3 CDN #6 — synchronous seed, same rationale as the
-        // two flags above (eliminates flash on cold start for returning
-        // users on hostile OEMs who already dismissed the sheet).
+        // tutorial flag above (eliminates flash on cold start for
+        // returning users on hostile OEMs who already dismissed the
+        // sheet).
         batteryOptimizationPrompted = orchestrator.isBatteryOptimizationPrompted()
 
         setContent {
@@ -256,15 +215,9 @@ class MainActivity : ComponentActivity() {
                 // `BuildConfig.DEBUG` constant-folds to `false`).
                 val testBypass = BuildConfig.DEBUG && bypassGatesForTest
                 val overlayOk = overlayGranted || testBypass
-                val notificationOk = notificationGranted || testBypass
                 val accessibilityOk = accessibilityServiceEnabled || testBypass
                 Box {
                     when {
-                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationOk -> PermissionExplanationScreen(
-                            variant = PermissionVariant.NOTIFICATION,
-                            onPrimaryClick = ::requestNotificationPermission,
-                            onExit = ::finish,
-                        )
                         !overlayOk -> PermissionExplanationScreen(
                             variant = PermissionVariant.OVERLAY,
                             onPrimaryClick = ::launchOverlaySettings,
@@ -279,11 +232,6 @@ class MainActivity : ComponentActivity() {
                             onActivateAccessibilityClick = ::launchAccessibilitySettings,
                             onComplete = ::onTutorialComplete,
                             onSkip = ::onTutorialSkip,
-                            // CDN #11 — `null` cut-out for first launch:
-                            // the bubble service has not started yet, so
-                            // no real anchor exists. The composable
-                            // renders scrim-only when `null`.
-                            bubbleAnchorOffset = null,
                         )
                         else -> {
                             // Story 6.3 — collect the 3 update-banner
@@ -361,7 +309,6 @@ class MainActivity : ComponentActivity() {
                     // CDN #10.
                     if (shouldShowBatteryOptimizationPrompt(
                             overlayOk = overlayOk,
-                            notificationOk = notificationOk,
                             accessibilityOk = accessibilityOk,
                         )
                     ) {
@@ -555,12 +502,10 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         // The user may have returned from any system Settings screen
-        // (overlay permission OR accessibility list OR app-notification
-        // settings). Re-check all three gates so the UI flips between
-        // the four states.
+        // (overlay permission OR accessibility list). Re-check both
+        // gates so the UI flips between the three states.
         overlayGranted = Settings.canDrawOverlays(this)
         accessibilityServiceEnabled = isAccessibilityServiceEnabled()
-        notificationGranted = checkNotificationPermission()
         // Story 5.3 — re-read the persisted flag so a write from the
         // previous resumed lifecycle (or a force-stop-and-relaunch
         // edge case) is reflected before recomposition evaluates the
@@ -604,13 +549,13 @@ class MainActivity : ComponentActivity() {
         // so the bubble service does NOT start during the tutorial.
         // Without this gate, the user's Card-1 "Activer" → Settings
         // round-trip → onResume re-checks accessibility-true → service
-        // starts → real bubble appears visually OVER tutorial Cards 2-4
-        // (which has `bubbleAnchorOffset = null` and renders no cut-out
-        // around the now-present bubble).
+        // starts → real bubble appears on top of the tutorial's
+        // full-screen canvas (post-Wispr-refonte 2026-05-19 the tutorial
+        // has no scrim/cut-out to hide it behind, so the bubble is
+        // simply distracting until the user finishes the 4 cards).
         if (tutorialSeen &&
             OnboardingOrchestrator.canStartBubbleService(
                 overlayGranted = overlayGranted,
-                notificationGranted = notificationGranted,
                 accessibilityEnabled = accessibilityServiceEnabled,
             )
         ) {
@@ -636,92 +581,13 @@ class MainActivity : ComponentActivity() {
         // V2 story needs a "have we ever fully onboarded" gate, it can
         // be re-derived from the existing flags at call time.
 
-        // Story 5.2 — auto-request POST_NOTIFICATIONS on first launch
-        // (API 33+ only). Suppresses re-prompting per CDN #6: the flag
-        // captures that the dialog has been SHOWN, not the outcome. The
-        // gate `!notificationPermissionAsked` short-circuits subsequent
-        // onResume calls in the same install. The `bypassGatesForTest`
-        // guard (BuildConfig.DEBUG only) prevents the OS dialog from
-        // claiming focus during instrumented tests — without it, the
-        // dialog pushes MainActivity to PAUSED and `createAndroidComposeRule`
-        // never sees the RESUMED state required to query the Compose
-        // tree.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            !notificationGranted &&
-            !notificationPermissionAsked &&
-            !(BuildConfig.DEBUG && bypassGatesForTest)
-        ) {
-            requestNotificationPermission()
-        }
-    }
-
-    /**
-     * Story 5.2 — Returns the current POST_NOTIFICATIONS permission
-     * state. On API < 33 the permission is install-time-granted, so the
-     * three-condition service-start gate trivially short-circuits this
-     * branch via `apiLevel < 33` per CDN #2 second clause. We still
-     * return `true` here to keep the Compose-state representation
-     * consistent across API levels (so the `when {}` cascade does not
-     * stall on a `false` reading that the gate would otherwise ignore).
-     */
-    private fun checkNotificationPermission(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
-        return ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.POST_NOTIFICATIONS,
-        ) == PackageManager.PERMISSION_GRANTED
-    }
-
-    /**
-     * Story 5.2 — Trigger the runtime POST_NOTIFICATIONS dialog via the
-     * field-initialized launcher (CDN #7). The launcher callback writes
-     * the `notification_permission_asked` flag and updates the
-     * `notificationGranted` Compose state on the user's response.
-     *
-     * Story 5.2 code-review P3 — After Android's automatic "Don't ask
-     * again" kicks in (post-second-deny on API 33+), the launcher's
-     * `launch()` no-ops silently with `granted=false` and the user is
-     * soft-locked on `PermissionExplanationScreen.PermissionVariant.NOTIFICATION`.
-     * Detect this state via `!shouldShowRequestPermissionRationale &&
-     * notificationPermissionAsked` and deep-link to the system's
-     * per-app notification settings instead (mirrors `launchOverlaySettings`
-     * pattern). The same `settingsLaunchDebounceOpen()` guard prevents
-     * rapid double-taps from spawning multiple Settings instances.
-     */
-    private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        val twiceDeniedLockout = notificationPermissionAsked &&
-            !ActivityCompat.shouldShowRequestPermissionRationale(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS,
-            )
-        if (twiceDeniedLockout) {
-            launchAppNotificationSettings()
-        } else {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
-    }
-
-    /**
-     * Story 5.2 code-review P3 — Settings deep-link for per-app
-     * notification permission, used when the OS has put the user in
-     * the twice-denied lockout state (CDN #6 + P3 fix). Mirrors the
-     * `launchOverlaySettings` pattern with the same debounce guard.
-     */
-    private fun launchAppNotificationSettings() {
-        if (!settingsLaunchDebounceOpen()) return
-        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
-        try {
-            startActivity(intent)
-        } catch (e: ActivityNotFoundException) {
-            Log.w(TAG, "ACTION_APP_NOTIFICATION_SETTINGS not resolvable on this device", e)
-            Toast.makeText(
-                this,
-                R.string.permission_settings_unavailable,
-                Toast.LENGTH_LONG,
-            ).show()
-        }
+        // Story 5.2 — auto-prompt for POST_NOTIFICATIONS removed
+        // 2026-05-19 per Hernat product decision. The permission is now
+        // optional: the foreground-service notification is suppressed
+        // (silently) when the OS hasn't granted it, but the bubble
+        // overlay continues to function. Users who want the persistent
+        // notification grant it via system Settings → Apps →
+        // VeriSphere → Notifications.
     }
 
     /**
@@ -938,14 +804,13 @@ class MainActivity : ComponentActivity() {
      *      (AC #5): once dismissed, never re-shown.
      *
      * CDN #10 — the caller passes the test-bypass-AWARE booleans
-     * (`overlayOk`, `notificationOk`, `accessibilityOk`) so that under
-     * `bypassGatesForTest = true`, the three permission gates are
-     * forced true. Otherwise the AVD's actual permission state would
-     * keep the sheet from mounting under instrumented test.
+     * (`overlayOk`, `accessibilityOk`) so that under
+     * `bypassGatesForTest = true`, the two permission gates are forced
+     * true. Otherwise the AVD's actual permission state would keep the
+     * sheet from mounting under instrumented test.
      */
     private fun shouldShowBatteryOptimizationPrompt(
         overlayOk: Boolean,
-        notificationOk: Boolean,
         accessibilityOk: Boolean,
     ): Boolean {
         // Capture the static-mutable companion field into a local val
@@ -964,7 +829,6 @@ class MainActivity : ComponentActivity() {
         return tutorialSeen &&
             OnboardingOrchestrator.canStartBubbleService(
                 overlayGranted = overlayOk,
-                notificationGranted = notificationOk,
                 accessibilityEnabled = accessibilityOk,
             ) &&
             isHostileOem(manufacturer) &&
