@@ -2,6 +2,8 @@
 
 Page d'accueil statique HTML/CSS/JS pour [VeriSphere](https://github.com/Hernat/VeriSphere). Réutilise le langage visuel Wispr Flow de l'Epic 8 (palette crème + sauge, EB Garamond + Figtree) et met en avant le pipeline triple-vérification (Gemini + SerpAPI + Gemini reverdict) shippé en v0.2.1.
 
+> Le dossier s'appelle `docs/` (pas `landing/`) parce que GitHub Pages "Deploy from a branch" n'accepte que `/ (root)` ou `/docs` comme dossier de publication — c'est une contrainte du provider, pas un choix sémantique.
+
 ## Aperçu local
 
 Aucun build step, aucune dépendance npm. Deux façons d'ouvrir :
@@ -11,7 +13,7 @@ Aucun build step, aucune dépendance npm. Deux façons d'ouvrir :
 **B. Serveur local (recommandé)** :
 
 ```powershell
-cd D:\Projets\Gemini-Verif\landing
+cd D:\Projets\Gemini-Verif\docs
 python -m http.server 8000
 # puis ouvre http://localhost:8000
 ```
@@ -19,31 +21,34 @@ python -m http.server 8000
 ## Structure
 
 ```
-landing/
-├── index.html                # page unique, FR, 12 sections sémantiques
+docs/
+├── index.html                # page unique, FR, 8 sections sémantiques
 ├── styles.css                # tokens Wispr Flow + responsive + dark mode
 ├── script.js                 # theme toggle, smooth scroll, scroll-reveal, sprite inline
 ├── assets/
 │   ├── logo_vs.png           # copié depuis app/src/main/res/drawable-nodpi/
 │   ├── favicon.svg           # glyph "◐" sauge sur crème
 │   ├── icons.svg             # sprite Lucide-style monochrome
-│   └── screenshots/          # captures Android réelles (ratio 1280×2856)
-│       ├── bubble-home.png       # bulle flottant sur l'écran d'accueil (HERO)
-│       ├── history-full.png      # écran Vérifications récentes avec tabs
-│       ├── detail-panel.png      # panneau détail avec sources + Built with Gemini
-│       ├── settings-api.png      # écran Paramètres · clés API BYOK
-│       └── history-overlay.png   # historique en panel d'aperçu (overlay)
+│   └── screenshots/          # captures Android réelles (1280×2856)
+│       ├── bull-flottant.png        # bulle sur l'écran d'accueil (HERO)
+│       ├── bull-veille.png          # bulle en veille (section "En action")
+│       ├── bull-chargement.png      # bulle en cours de vérification
+│       ├── bull-verdict-tooltip.png # bulle + flash verdict VRAI
+│       ├── listes-verdict.png       # écran Vérifications récentes avec tabs
+│       ├── details-verdict.png      # panneau détail avec sources
+│       ├── parametre-page.png       # écran Paramètres · clés API BYOK
+│       └── historique-page.png      # historique en panel d'aperçu (overlay)
 └── README.md                 # ce fichier
 ```
 
 ### Captures d'écran
 
-Les 5 PNG dans `assets/screenshots/` sont les captures Android réelles de l'app (capturées via AVD, ratio Pixel ~1280×2856). Elles incluent déjà le bezel/notch du device — pas besoin d'un wrapper `.phone` CSS supplémentaire. Le CSS `.phone-img` applique seulement un `border-radius` + shadow + `aspect-ratio` pour préserver les proportions.
+Les 8 PNG dans `assets/screenshots/` sont les captures Android réelles de l'app (capturées via AVD, ratio Pixel ~1280×2856). Elles incluent déjà le bezel/notch du device — pas besoin d'un wrapper `.phone` CSS supplémentaire. Le CSS `.phone-img` applique seulement un `border-radius` + shadow + `aspect-ratio` pour préserver les proportions.
 
 Pour les régénérer après une mise à jour de l'UI :
 ```bash
 # Avec l'AVD démarré et l'app installée :
-adb -s emulator-5554 exec-out screencap -p > landing/assets/screenshots/bubble-home.png
+adb -s emulator-5554 exec-out screencap -p > docs/assets/screenshots/bull-flottant.png
 # Répéter pour chaque écran à capturer
 ```
 
@@ -82,18 +87,13 @@ Typographies via Google Fonts (preconnect inclus dans `<head>`) :
 
 ## Déployer sur GitHub Pages
 
-1. Settings → Pages → Source : `Deploy from a branch` → `main` / `/landing` (subfolder publishing).
-2. L'URL sera `https://hernat.github.io/VeriSphere/`.
+1. Va sur https://github.com/Hernat/VeriSphere/settings/pages
+2. **Source** : `Deploy from a branch`
+3. **Branch** : `main` + **Folder** : `/docs`
+4. Clique **Save**
+5. URL finale : `https://hernat.github.io/VeriSphere/`
 
-Optionnel — workflow auto-deploy via GitHub Actions : à créer dans `.github/workflows/pages.yml` (non inclus pour rester en single-asset par défaut).
-
-## À éviter / TODO
-
-- ❌ Pas d'images de captures d'écran réelles (l'app n'a pas encore d'APK publié) — les mockups CSS suffisent jusqu'à la v1.0.0
-- ❌ Pas de version EN (le projet est FR-first)
-- ❌ Pas d'analytics / tracker
-- 🟡 QR code dynamique vers l'APK : placeholder pour l'instant, à brancher sur l'URL de Release v0.2.1-beta1 une fois publiée
-- 🟡 OG image dédiée (utilise `logo_vs.png` faute de mieux) — à remplacer par une capture composée 1200×630
+Le re-déploiement est automatique à chaque push sur `main` qui modifie `docs/`.
 
 ## Crédits
 
