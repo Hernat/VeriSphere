@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="fr" data-theme>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VeriSphere — Vérifie une info en un long-press</title>
+  <meta name="description" content="VeriSphere est une bulle Android open-source qui vérifie les affirmations à l'écran via Gemini + recherche Google en moins de 30 secondes. Aucune télémétrie, chiffré localement.">
+  <meta name="theme-color" content="#F8F4EA">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="VeriSphere — Vérifie une info en un long-press">
+  <meta property="og:description" content="Bulle Android open-source. Triple vérification Gemini + Google + reverdict. Chiffré localement, zéro télémétrie.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://github.com/Hernat/VeriSphere">
+  <meta property="og:image" content="assets/logo_vs.png">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Figtree:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="script.js"></script>
+</head>
+<body>
+
+<!-- Icon sprite (inlined via fetch + DOM injection in script.js for cross-file refs) -->
+<div id="svg-sprite-host" hidden></div>
+
+<!-- Skip link -->
+<a href="#main" class="visually-hidden" style="position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden;">Aller au contenu</a>
+
+<!-- =============== TOPBAR =============== -->
+<header class="topbar" role="banner">
+  <div class="topbar-inner">
+    <a href="#" class="brand" aria-label="VeriSphere accueil">
+      <img src="assets/logo_vs.png" alt="" class="brand-mark" width="32" height="32">
+      <span class="brand-wordmark"><em>Veri</em>Sphere</span>
+      <span class="brand-version">BÊTA 0.2.1</span>
+    </a>
+    <nav class="topbar-nav" aria-label="Navigation principale">
+      <a href="#pourquoi">Pourquoi</a>
+      <a href="#comment">Comment</a>
+      <a href="#cles-api">Clés API</a>
+      <a href="#vie-privee">Vie privée</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://github.com/Hernat/VeriSphere" target="_blank" rel="noopener noreferrer">GitHub</a>
+    </nav>
+    <div class="topbar-actions">
+      <button class="btn-ghost" id="theme-toggle" type="button" aria-label="Basculer le thème clair/sombre">
+        <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-sun"/></svg>
+      </button>
+      <a class="btn btn-primary btn-sm" href="#telecharger">
+        <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-download"/></svg>
+        Télécharger
+      </a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- =============== HERO =============== -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <div class="eyebrow"><span class="dot"></span> BÊTA · v0.2.1 · Android 11+</div>
+          <h1 class="hero-title">Vérifie une info en <em>un long-press</em>.</h1>
+          <p class="hero-sub">
+            La bulle flottante VeriSphere capture ce que tu lis, envoie à Gemini avec recherche Google, et te rend un verdict en moins de 30 secondes. Sans changer ton flow.
+          </p>
+          <div class="hero-cta">
+            <a class="btn btn-primary" href="#telecharger">
+              <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-download"/></svg>
+              Télécharger l'APK
+            </a>
+            <a class="btn btn-outline" href="https://github.com/Hernat/VeriSphere" target="_blank" rel="noopener noreferrer">
+              <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-github"/></svg>
+              Code source
+            </a>
+          </div>
+          <div class="hero-trust">
+            <span><svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-lock"/></svg> Chiffré localement</span>
+            <span><svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-eye-off"/></svg> Zéro télémétrie</span>
+            <span><svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-key"/></svg> BYOK · tes clés</span>
+            <span><svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-code"/></svg> MIT open-source</span>
+          </div>
+        </div>
+
+        <div class="phone-stage">
+          <img
+            src="assets/screenshots/bull-flottant.png"
+            alt="Capture Android — bulle VeriSphere flottant sur l'écran d'accueil"
+            class="phone-img phone-img-lg"
+            width="1280" height="2856">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== POURQUOI (Before/After) =============== -->
+  <section class="section" id="pourquoi">
+    <div class="container">
+      <div class="section-label reveal">01 — Le problème</div>
+      <h2 class="section-title reveal">5 étapes manuelles, ou <em>une seule</em>.</h2>
+      <p class="section-desc reveal">
+        Vérifier une affirmation sur les réseaux, aujourd'hui, c'est jongler entre plusieurs apps. VeriSphere remplace toute cette chorégraphie par un geste qui ne casse pas ton flow.
+      </p>
+      <div class="ba-grid">
+        <div class="ba-card before reveal">
+          <div class="ba-label before">Avant — workflow manuel</div>
+          <div class="ba-title">Capture, switch, importe, tape, attends, reviens.</div>
+          <ul class="ba-steps">
+            <li>Capture d'écran (bouton physique)</li>
+            <li>Ouvre l'app Gemini ou ChatGPT</li>
+            <li>Importe l'image dans le chat</li>
+            <li>Tape « c'est vrai ça ? »</li>
+            <li>Attends la réponse, reviens à l'app</li>
+          </ul>
+          <div class="ba-time">~ 30 secondes · 5 changements de contexte</div>
+        </div>
+        <div class="ba-card after reveal">
+          <div class="ba-label after">Après — VeriSphere</div>
+          <div class="ba-title">Une bulle, un long-press, un verdict.</div>
+          <ul class="ba-steps">
+            <li>La bulle flotte au-dessus de toutes tes apps</li>
+            <li>Maintiens-la sur ce que tu lis</li>
+            <li>Verdict en flash à côté de la bulle</li>
+            <li>Tape pour voir les sources et le détail</li>
+          </ul>
+          <div class="ba-time">~ 15-30 secondes · zéro changement d'app</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== FEATURES =============== -->
+  <section class="section" id="fonctionnalites">
+    <div class="container">
+      <div class="section-label reveal">02 — Fonctionnalités</div>
+      <h2 class="section-title reveal">Tout ce qu'il faut, <em>rien de plus</em>.</h2>
+      <p class="section-desc reveal">
+        VeriSphere est volontairement minimaliste. Pas de compte. Pas de notification permanente. Pas de chat. Une bulle, un verdict, des sources.
+      </p>
+
+      <div class="features-grid">
+        <article class="feature-card reveal">
+          <div class="feature-icon"><svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-bubble"/></svg></div>
+          <h3 class="feature-title">Bulle persistante</h3>
+          <p class="feature-desc">Flotte au-dessus de toutes les applis, déplaçable à une main, fade discret après 8 secondes d'inactivité.</p>
+        </article>
+
+        <article class="feature-card reveal">
+          <div class="feature-icon"><svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-tag"/></svg></div>
+          <h3 class="feature-title">Verdict en 4 labels</h3>
+          <p class="feature-desc">VRAI · FAUX · DOUTEUX · NON VÉRIFIABLE. Quatre pastels éditoriaux, jamais alarmistes, lisibles d'un coup d'œil.</p>
+        </article>
+
+        <article class="feature-card warn reveal">
+          <div class="feature-icon"><svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-zap"/></svg></div>
+          <h3 class="feature-title">Triple vérification</h3>
+          <p class="feature-desc">Gemini Vision pour lire l'image, SerpAPI pour interroger Google en live, puis Gemini reverdict qui re-décide en se basant sur la recherche la plus à jour.</p>
+        </article>
+
+        <article class="feature-card alt reveal">
+          <div class="feature-icon"><svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-layers"/></svg></div>
+          <h3 class="feature-title">Sources cliquables</h3>
+          <p class="feature-desc">Citations Search Grounding + résultats Google fusionnés, dédupliqués, ordonnés par fiabilité. Un tap, l'article s'ouvre.</p>
+        </article>
+
+        <article class="feature-card alt reveal">
+          <div class="feature-icon"><svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-clock"/></svg></div>
+          <h3 class="feature-title">Historique chiffré</h3>
+          <p class="feature-desc">Les 50 dernières vérifications stockées chiffrées localement via Android Keystore. Aucun upload, aucune sauvegarde cloud.</p>
+        </article>
+
+        <article class="feature-card reveal">
+          <div class="feature-icon"><svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-code"/></svg></div>
+          <h3 class="feature-title">MIT open-source</h3>
+          <p class="feature-desc">Code source public sur GitHub. Contributions bienvenues. Aucune dépendance opaque, aucun tracker.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== COMMENT (How it works) =============== -->
+  <section class="section" id="comment" style="background: var(--paper);">
+    <div class="container">
+      <div class="section-label reveal">03 — Comment ça marche</div>
+      <h2 class="section-title reveal">Trois étapes, une fois pour toutes.</h2>
+      <p class="section-desc reveal">
+        Installation et activation prennent moins de deux minutes. Ensuite, la bulle est là dès que tu en as besoin.
+      </p>
+
+      <div class="steps-grid">
+        <div class="step-card reveal">
+          <div class="step-number">01.</div>
+          <h3 class="step-title">Active le service d'accessibilité</h3>
+          <p class="step-desc">À la première ouverture, VeriSphere t'amène dans les réglages Android pour activer le service. C'est ce qui permet à la bulle de capturer ce que tu lis, uniquement quand tu la maintiens.</p>
+        </div>
+        <div class="step-card reveal">
+          <div class="step-number">02.</div>
+          <h3 class="step-title">Maintiens la bulle sur ce que tu lis</h3>
+          <p class="step-desc">Un long-press de la bulle déclenche la capture. Aucun bouton physique, aucune notification permanente. Le verdict apparaît en flash à côté de la bulle en moins de 30 secondes.</p>
+        </div>
+        <div class="step-card reveal">
+          <div class="step-number">03.</div>
+          <h3 class="step-title">Tape pour voir les sources</h3>
+          <p class="step-desc">Le panneau de détail s'ouvre avec les sources, le texte extrait par OCR, et la synthèse Google qui a soutenu le verdict. Tu cliques sur une source pour ouvrir l'article original.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== BULLE EN ACTION (lifecycle) =============== -->
+  <section class="section" id="bulle-action" style="background: var(--paper);">
+    <div class="container">
+      <div class="section-label reveal">04 — En action</div>
+      <h2 class="section-title reveal">La bulle, <em>en trois temps</em>.</h2>
+      <p class="section-desc reveal">
+        Captures réelles de l'app. Sur le même post Facebook, la bulle traverse trois états : elle attend en veille, traite ta demande pendant la vérification, puis affiche le verdict en flash juste à côté.
+      </p>
+
+      <div class="lifecycle-grid">
+        <figure class="lifecycle-card reveal">
+          <img src="assets/screenshots/bull-veille.png"
+               alt="Bulle VeriSphere en veille sur un post Facebook"
+               class="phone-img" loading="lazy" width="1280" height="2856">
+          <figcaption>
+            <span class="lifecycle-step">01 · Veille</span>
+            <strong>Discrète, en attente</strong>
+            <span>La bulle reste à disposition au-dessus de toutes les apps. Faded après 8 secondes d'inactivité pour ne pas gêner la lecture.</span>
+          </figcaption>
+        </figure>
+
+        <figure class="lifecycle-card reveal">
+          <img src="assets/screenshots/bull-chargement.png"
+               alt="Bulle VeriSphere en train de vérifier — anneau de progression"
+               class="phone-img" loading="lazy" width="1280" height="2856">
+          <figcaption>
+            <span class="lifecycle-step">02 · Chargement</span>
+            <strong>Triple vérification en cours</strong>
+            <span>Long-press déclenche le pipeline : Gemini Vision → SerpAPI Google → Gemini reverdict. Anneau de progression visible.</span>
+          </figcaption>
+        </figure>
+
+        <figure class="lifecycle-card reveal">
+          <img src="assets/screenshots/bull-verdict-tooltip.png"
+               alt="Bulle VeriSphere affichant un verdict VRAI en flash à côté"
+               class="phone-img" loading="lazy" width="1280" height="2856">
+          <figcaption>
+            <span class="lifecycle-step">03 · Verdict</span>
+            <strong>Réponse en flash</strong>
+            <span>Verdict + une ligne d'explication à côté de la bulle. Tu peux taper pour ouvrir le détail avec les sources, ou laisser le flash disparaître seul.</span>
+          </figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== BYOK / API KEYS =============== -->
+  <section class="section" id="cles-api">
+    <div class="container">
+      <div class="section-label reveal">05 — Configuration</div>
+      <h2 class="section-title reveal">Tu apportes <em>tes propres clés</em>.</h2>
+      <p class="section-desc reveal">
+        VeriSphere fonctionne en <strong>BYOK</strong> (Bring Your Own Key). Les deux clés sont <strong>gratuites à obtenir</strong> — il suffit d'un compte Google pour Gemini et d'une inscription email pour SerpAPI. Tu les colles dans l'onglet <em>Paramètres</em> à la première ouverture, elles sont chiffrées localement via Android Keystore et ne quittent jamais ton téléphone.
+      </p>
+
+      <div class="provider-grid">
+        <article class="provider-card required reveal">
+          <div class="provider-head">
+            <div class="provider-icon"><svg class="icon-lg" aria-hidden="true"><use href="assets/icons.svg#i-zap"/></svg></div>
+            <div>
+              <div class="provider-label">Requis · gratuit</div>
+              <h3 class="provider-name">Clé API Gemini</h3>
+            </div>
+          </div>
+          <p class="provider-desc">
+            Le moteur de vérification — analyse l'image et émet le verdict. <strong>Free tier généreux</strong> : 15 requêtes/min et 1 500 requêtes/jour sur <code>gemini-2.5-flash</code>, largement suffisant pour un usage quotidien. Aucune carte bancaire demandée.
+          </p>
+          <div class="provider-meta">
+            <span class="provider-meta-label">Free tier</span>
+            <code>15 req/min · 1 500 req/jour</code>
+          </div>
+          <a class="btn btn-primary btn-sm" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">
+            Obtenir une clé Gemini gratuite
+            <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-arrow-up-right"/></svg>
+          </a>
+          <div class="provider-source">aistudio.google.com/apikey</div>
+        </article>
+
+        <article class="provider-card optional reveal">
+          <div class="provider-head">
+            <div class="provider-icon alt"><svg class="icon-lg" aria-hidden="true"><use href="assets/icons.svg#i-layers"/></svg></div>
+            <div>
+              <div class="provider-label">Optionnel · gratuit</div>
+              <h3 class="provider-name">Clé API SerpAPI</h3>
+            </div>
+          </div>
+          <p class="provider-desc">
+            La couche de recherche Google en direct — alimente le pipeline de reverdict et fournit les sources cliquables. <strong>Free tier 250 recherches/mois</strong>, aucune carte bancaire demandée. Sans elle, VeriSphere fonctionne en mode Gemini-seul (verdict + sources Search Grounding).
+          </p>
+          <div class="provider-meta">
+            <span class="provider-meta-label">Free tier</span>
+            <code>250 recherches/mois</code>
+          </div>
+          <a class="btn btn-outline btn-sm" href="https://serpapi.com/manage-api-key" target="_blank" rel="noopener noreferrer">
+            Obtenir une clé SerpAPI gratuite
+            <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-arrow-up-right"/></svg>
+          </a>
+          <div class="provider-source">serpapi.com/manage-api-key</div>
+        </article>
+      </div>
+
+      <div class="byok-note reveal">
+        <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-lock"/></svg>
+        <span>Les clés sont stockées chiffrées localement (Android Keystore + EncryptedSharedPreferences). Aucune transmission en dehors des appels HTTPS directs vers Gemini et SerpAPI.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== VIE PRIVÉE / Trust =============== -->
+  <section class="section" id="vie-privee">
+    <div class="container">
+      <div class="section-label reveal">06 — Posture</div>
+      <h2 class="section-title reveal">Tes données restent <em>sur ton téléphone</em>.</h2>
+      <p class="section-desc reveal">
+        Le trafic sortant se limite à deux destinations : l'API Gemini (pour la vérification) et la recherche Google (via SerpAPI, pour les sources). Aucun analytics, aucun crash reporting, aucun backup cloud.
+      </p>
+
+      <div class="trust-row">
+        <div class="trust-card reveal">
+          <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-lock"/></svg>
+          <span class="trust-card-label">Chiffré localement</span>
+        </div>
+        <div class="trust-card reveal">
+          <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-eye-off"/></svg>
+          <span class="trust-card-label">Aucune télémétrie</span>
+        </div>
+        <div class="trust-card reveal">
+          <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-key"/></svg>
+          <span class="trust-card-label">BYOK ready</span>
+        </div>
+        <div class="trust-card reveal">
+          <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-shield"/></svg>
+          <span class="trust-card-label">MIT open-source</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== TECH BAR =============== -->
+  <section class="tech-bar reveal">
+    <div class="container">
+      <div class="tech-row">
+        <strong>Construit avec</strong>
+        <span>Gemini 2.5 Flash</span><span class="sep">·</span>
+        <span>SerpAPI</span><span class="sep">·</span>
+        <span>Jetpack Compose</span><span class="sep">·</span>
+        <span>Kotlin Coroutines</span><span class="sep">·</span>
+        <span>OkHttp</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== SCREENSHOTS GALLERY =============== -->
+  <section class="section" id="apercu">
+    <div class="container">
+      <div class="section-label reveal">07 — Aperçu</div>
+      <h2 class="section-title reveal">Les quatre écrans que tu verras.</h2>
+      <p class="section-desc reveal">
+        Capture, verdict détaillé avec sources contradictoires (le cas où Google contredit Gemini), historique des vérifications, et écran d'activation. Toutes les surfaces refondues en langage éditorial Wispr Flow.
+      </p>
+
+      <div class="gallery">
+        <div class="phone-wrap">
+          <img
+            src="assets/screenshots/listes-verdict.png"
+            alt="Écran historique des vérifications avec tabs Historique / Paramètres"
+            class="phone-img" loading="lazy" width="1280" height="2856">
+          <div class="phone-caption">Vérifications récentes · onglet Historique</div>
+        </div>
+
+        <div class="phone-wrap">
+          <img
+            src="assets/screenshots/details-verdict.png"
+            alt="Panneau détail d'une vérification avec sources et attribution Built with Gemini"
+            class="phone-img" loading="lazy" width="1280" height="2856">
+          <div class="phone-caption">Panneau détail · sources + texte analysé</div>
+        </div>
+
+        <div class="phone-wrap">
+          <img
+            src="assets/screenshots/parametre-page.png"
+            alt="Écran Paramètres avec les champs Clé API Gemini et Clé API SerpAPI sauvegardées"
+            class="phone-img" loading="lazy" width="1280" height="2856">
+          <div class="phone-caption">Paramètres · clés API BYOK</div>
+        </div>
+
+        <div class="phone-wrap">
+          <img
+            src="assets/screenshots/historique-page.png"
+            alt="Historique en panel d'aperçu glissant sur l'écran d'accueil"
+            class="phone-img" loading="lazy" width="1280" height="2856">
+          <div class="phone-caption">Historique en panel · accès rapide</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============== FAQ =============== -->
+  <section class="section" id="faq">
+    <div class="container">
+      <div class="section-label reveal">08 — FAQ</div>
+      <h2 class="section-title reveal">Les questions qu'on nous pose.</h2>
+
+      <div class="faq-list">
+        <details class="faq-item reveal">
+          <summary>
+            Comment VeriSphere accède-t-il à mon écran ?
+            <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-chevron-down"/></svg>
+          </summary>
+          <div class="faq-answer">
+            Via le service d'accessibilité Android, que tu actives explicitement à la première ouverture. La capture ne se déclenche QUE quand tu fais un long-press sur la bulle. Aucun enregistrement permanent, aucun screen recording en arrière-plan.
+          </div>
+        </details>
+
+        <details class="faq-item reveal">
+          <summary>
+            Mes captures sont-elles envoyées quelque part ?
+            <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-chevron-down"/></svg>
+          </summary>
+          <div class="faq-answer">
+            L'image capturée est envoyée à l'API Gemini pour la vérification, puis le texte extrait est envoyé à SerpAPI pour la recherche Google. Les deux requêtes sont en HTTPS direct depuis ton téléphone, sans intermédiaire. Rien n'est stocké côté serveur de VeriSphere — il n'y a pas de serveur VeriSphere.
+          </div>
+        </details>
+
+        <details class="faq-item reveal">
+          <summary>
+            C'est gratuit ?
+            <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-chevron-down"/></svg>
+          </summary>
+          <div class="faq-answer">
+            Oui, l'app est gratuite et open-source (MIT). Les deux clés API que tu fournis sont gratuites elles aussi : <strong>Gemini</strong> (15 requêtes/min, 1 500/jour) et <strong>SerpAPI</strong> (250 recherches/mois), sans aucune carte bancaire demandée. Largement suffisant pour un usage quotidien normal.
+          </div>
+        </details>
+
+        <details class="faq-item reveal">
+          <summary>
+            C'est quoi « BYOK » et comment ça marche ?
+            <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-chevron-down"/></svg>
+          </summary>
+          <div class="faq-answer">
+            BYOK = <em>Bring Your Own Key</em>. Tu fournis tes propres clés API Gemini (requise) et SerpAPI (optionnelle) à la première ouverture de l'app, dans l'onglet <em>Paramètres</em>. Stockées chiffrées localement via Android Keystore. Tu contrôles ta facturation, ta quota, et aucune clé serveur partagée ne risque d'être épuisée par d'autres utilisateurs. Détails et liens directs pour obtenir les clés dans la <a href="#cles-api">section Configuration ci-dessus</a>.
+          </div>
+        </details>
+
+        <details class="faq-item reveal">
+          <summary>
+            Pourquoi Android uniquement ? Et iOS ?
+            <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-chevron-down"/></svg>
+          </summary>
+          <div class="faq-answer">
+            La bulle flottante repose sur deux APIs Android : <code>SYSTEM_ALERT_WINDOW</code> et le service d'accessibilité. iOS ne permet pas de surface flottante system-wide pour des apps tierces. Une version iOS demanderait un paradigme complètement différent (action de partage, extension). Ce n'est pas dans la roadmap actuelle.
+          </div>
+        </details>
+
+        <details class="faq-item reveal">
+          <summary>
+            Quelle est la précision réelle ?
+            <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-chevron-down"/></svg>
+          </summary>
+          <div class="faq-answer">
+            VeriSphere n'est pas un oracle. Il aggrège Gemini + Google et te donne un verdict argumenté avec sources. La triple-vérification (Gemini #1 → SerpAPI → Gemini reverdict) rattrape les cas où Gemini est en retard sur l'actualité. Mais lis toujours les sources — c'est elles qui comptent, pas le label.
+          </div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- =============== DOWNLOAD CTA =============== -->
+<section class="download-cta" id="telecharger">
+  <div class="container">
+    <h2>Prêt à <em>essayer</em> ?</h2>
+    <p>
+      L'APK v0.2.1-beta1 sera publié sur GitHub Releases dès la fin du ship-gate V1. En attendant, tu peux builder depuis les sources.
+    </p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="https://github.com/Hernat/VeriSphere/releases" target="_blank" rel="noopener noreferrer">
+        <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-download"/></svg>
+        Voir les releases
+      </a>
+      <a class="btn btn-outline" href="https://github.com/Hernat/VeriSphere" target="_blank" rel="noopener noreferrer">
+        <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#i-github"/></svg>
+        Builder depuis le code
+      </a>
+    </div>
+    <div class="download-fineprint">
+      Android 11+ requis · taille APK ~ 4 Mo · signé v3 · checksum publié sur la page Release
+    </div>
+  </div>
+</section>
+
+<!-- =============== FOOTER =============== -->
+<footer>
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <div class="brand">
+          <img src="assets/logo_vs.png" alt="" class="brand-mark" width="32" height="32" loading="lazy">
+          <span class="brand-wordmark"><em>Veri</em>Sphere</span>
+          <span class="brand-version">0.2.1</span>
+        </div>
+        <p>
+          Bulle Android open-source qui vérifie les affirmations à l'écran via Gemini + Google. Conçue pour disparaître entre deux usages, réapparaître à la demande.
+        </p>
+      </div>
+
+      <div class="footer-col">
+        <h4>Projet</h4>
+        <ul>
+          <li><a href="https://github.com/Hernat/VeriSphere" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+          <li><a href="https://github.com/Hernat/VeriSphere/releases" target="_blank" rel="noopener noreferrer">Releases</a></li>
+          <li><a href="https://github.com/Hernat/VeriSphere/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer">Changelog</a></li>
+          <li><a href="https://github.com/Hernat/VeriSphere/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">Licence MIT</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col">
+        <h4>Documentation</h4>
+        <ul>
+          <li><a href="https://github.com/Hernat/VeriSphere/blob/main/README.md" target="_blank" rel="noopener noreferrer">README</a></li>
+          <li><a href="https://github.com/Hernat/VeriSphere/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener noreferrer">Contribuer</a></li>
+          <li><a href="https://github.com/Hernat/VeriSphere/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer">Sécurité</a></li>
+          <li><a href="https://ai.google.dev/" target="_blank" rel="noopener noreferrer">API Gemini</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="footer-base">
+      <div>© 2026 Hernat · MIT · <em>Built with Gemini</em></div>
+      <div>VeriSphere est une app tierce non affiliée à Google LLC.</div>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
