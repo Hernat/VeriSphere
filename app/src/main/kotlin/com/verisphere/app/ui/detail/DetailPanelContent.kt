@@ -38,6 +38,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.verisphere.app.R
@@ -296,10 +298,19 @@ private fun SupplementaryInfoSection(
         }
         if (hasSerp) {
             Column(verticalArrangement = Arrangement.spacedBy(VSSpacing.space4)) {
+                // Hernat 2026-05-19 — bumped "Synthèse Google" weight to
+                // Bold + size to 13 sp + colour to `ink` so the subtitle
+                // reads as a deliberate sub-heading, not a faded caption.
+                // Keeps the `labelTrackedSans` 0.14 em tracking that
+                // signals "editorial label" for visual continuity with
+                // the surrounding section headers.
                 Text(
                     text = stringResource(R.string.detail_section_serp_synthesis),
-                    style = VSTypography.labelTrackedSans,
-                    color = VSPalette.inkSoft,
+                    style = VSTypography.labelTrackedSans.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                    ),
+                    color = VSPalette.ink,
                 )
                 Text(
                     text = cleanedSerpMarkdown,

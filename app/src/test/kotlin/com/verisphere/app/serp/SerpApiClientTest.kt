@@ -212,7 +212,7 @@ class SerpApiClientTest {
     fun `empty api key returns NotConfigured without making HTTP call`() = runTest {
         val client = SerpApiClient(
             httpClient = okHttpClient(),
-            apiKey = "",
+            apiKeyProvider = { "" },
             endpointBase = server.url("/search").toString(),
         )
 
@@ -220,6 +220,24 @@ class SerpApiClientTest {
 
         assertEquals(SerpOutcome.Failure.NotConfigured, outcome)
         assertEquals("expected zero HTTP calls", 0, server.requestCount)
+    }
+
+    @Test
+    fun `whitespace-only api key returns NotConfigured without making HTTP call`() = runTest {
+        // Story 10.1 — the SerpAPI client now reads the key via a lambda
+        // and short-circuits on `isBlank()` (not just `isEmpty()`), so a
+        // user who saved a whitespace-only key in Settings still triggers
+        // the graceful-disable path.
+        val client = SerpApiClient(
+            httpClient = okHttpClient(),
+            apiKeyProvider = { "   \t  " },
+            endpointBase = server.url("/search").toString(),
+        )
+
+        val outcome = client.search("any query")
+
+        assertEquals(SerpOutcome.Failure.NotConfigured, outcome)
+        assertEquals(0, server.requestCount)
     }
 
     @Test
@@ -251,7 +269,7 @@ class SerpApiClientTest {
 
     private fun newClient(): SerpApiClient = SerpApiClient(
         httpClient = okHttpClient(),
-        apiKey = TEST_API_KEY,
+        apiKeyProvider = { TEST_API_KEY },
         endpointBase = server.url("/search").toString(),
     )
 

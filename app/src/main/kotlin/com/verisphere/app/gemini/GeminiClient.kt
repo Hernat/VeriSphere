@@ -1,7 +1,6 @@
 package com.verisphere.app.gemini
 
 import android.util.Log
-import com.verisphere.app.BuildConfig
 import com.verisphere.app.gemini.VerificationOutcome.Failure
 import com.verisphere.app.storage.SessionRecord
 import com.verisphere.app.util.tag
@@ -89,7 +88,19 @@ import kotlin.coroutines.resumeWithException
  */
 class GeminiClient(
     private val httpClient: OkHttpClient,
-    private val apiKey: String = BuildConfig.GEMINI_API_KEY,
+    /**
+     * Story 10.1 — API key is now provided by a lambda invoked fresh on
+     * every [verify] call. Wired in [com.verisphere.app.AppContainer]
+     * to [com.verisphere.app.onboarding.OnboardingOrchestrator.readUserGeminiApiKey]
+     * so the user-entered Settings value takes effect on the very next
+     * request (no client re-construction). The lambda may return an
+     * empty / blank string when the user has not configured a key —
+     * [verify] short-circuits to [VerificationOutcome.Failure.NotConfigured]
+     * BEFORE any network call, base64 encoding, or JSON build (cheaper
+     * than the pre-Story-10.1 `BuildConfig.GEMINI_API_KEY` default that
+     * always carried a non-empty value at build time).
+     */
+    private val apiKeyProvider: () -> String,
     private val model: String = DEFAULT_MODEL,
     private val endpointBase: String = ENDPOINT_BASE,
     private val systemPromptProvider: () -> String,
@@ -140,6 +151,16 @@ class GeminiClient(
      */
     suspend fun verify(frameJpeg: ByteArray): VerificationOutcome {
         Log.d(TAG, "verify start (frame ${frameJpeg.size} bytes)")
+
+        // Story 10.1 — read the user-configured API key fresh on every
+        // call. Short-circuit BEFORE any network / base64 / JSON build
+        // when blank so Settings → Save → next bubble long-press
+        // immediately picks up the new key without process restart.
+        val apiKey = apiKeyProvider()
+        if (apiKey.isBlank()) {
+            Log.w(TAG, "verify aborted — no Gemini API key configured")
+            return Failure.NotConfigured
+        }
 
         val outcome = try {
             val base64 = withContext(Dispatchers.Default) {

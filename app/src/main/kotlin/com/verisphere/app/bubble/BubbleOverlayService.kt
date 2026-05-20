@@ -1152,6 +1152,7 @@ class BubbleOverlayService :
             is BubbleState.FailureState.QuotaExhausted -> failure.tooltipFaded
             is BubbleState.FailureState.PossibleInjection -> failure.tooltipFaded
             is BubbleState.FailureState.NotFound -> failure.tooltipFaded
+            is BubbleState.FailureState.NoApiKey -> failure.tooltipFaded
         }
 
         // Story 7.4 MS4 — same WRAP_CONTENT-sized window pattern as

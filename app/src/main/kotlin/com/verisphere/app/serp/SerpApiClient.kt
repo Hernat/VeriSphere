@@ -1,7 +1,6 @@
 package com.verisphere.app.serp
 
 import android.util.Log
-import com.verisphere.app.BuildConfig
 import com.verisphere.app.util.tag
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -70,7 +69,16 @@ import kotlin.coroutines.resumeWithException
  */
 class SerpApiClient(
     private val httpClient: OkHttpClient,
-    private val apiKey: String = BuildConfig.SERP_API_KEY,
+    /**
+     * Story 10.1 — API key provided by a lambda invoked fresh on every
+     * [search] call. Wired in [com.verisphere.app.AppContainer] to
+     * [com.verisphere.app.onboarding.OnboardingOrchestrator.readUserSerpApiKey]
+     * so the user-entered Settings value takes effect on the very next
+     * request. A blank return value short-circuits to
+     * [SerpOutcome.Failure.NotConfigured] (graceful disable —
+     * SerpAPI is optional V1 enrichment per Epic 9 plan).
+     */
+    private val apiKeyProvider: () -> String,
     private val endpointBase: String = ENDPOINT_BASE,
 ) {
 
@@ -88,7 +96,8 @@ class SerpApiClient(
      *              `extractedClaim` (already stripped of social-media chrome).
      */
     suspend fun search(query: String): SerpOutcome {
-        if (apiKey.isEmpty()) {
+        val apiKey = apiKeyProvider()
+        if (apiKey.isBlank()) {
             return SerpOutcome.Failure.NotConfigured
         }
         if (query.isBlank()) {
@@ -99,7 +108,7 @@ class SerpApiClient(
         }
 
         // Try AI mode first.
-        val aiOutcome = runEngine(query, SerpEngine.GoogleAiMode)
+        val aiOutcome = runEngine(query, SerpEngine.GoogleAiMode, apiKey)
         if (aiOutcome is SerpOutcome.Success) {
             // Code-review P5 — accept any Success (refs OR markdown
             // non-empty) ; mapAiMode only returns Success when at least
@@ -114,12 +123,12 @@ class SerpApiClient(
         // immediately ; a second call would burn a credit without
         // improving the outcome.
         if (aiOutcome is SerpOutcome.Failure.EmptyPayload) {
-            return runEngine(query, SerpEngine.Google)
+            return runEngine(query, SerpEngine.Google, apiKey)
         }
         return aiOutcome
     }
 
-    private suspend fun runEngine(query: String, engine: SerpEngine): SerpOutcome {
+    private suspend fun runEngine(query: String, engine: SerpEngine, apiKey: String): SerpOutcome {
         val url = endpointBase.toHttpUrl().newBuilder()
             .addQueryParameter("engine", engine.queryParam())
             .addQueryParameter("q", query)

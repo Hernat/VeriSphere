@@ -42,69 +42,19 @@ val versionPatch: Int = parseVersionPart("PATCH", 0..99)
 val resolvedVersionName: String = "$versionMajor.$versionMinor.$versionPatch"
 val resolvedVersionCode: Int = versionMajor * 10_000 + versionMinor * 100 + versionPatch
 
-// ─── GEMINI_API_KEY resolution (D2.2 / D2.9) ─────────────────────────────
-// Order: local.properties (dev) → GEMINI_API_KEY env var (CI). Fail fast
-// if neither source provides a value — no obfuscation, no silent default.
-val resolvedGeminiApiKey: String = run {
-    val localPropsFile = rootProject.file("local.properties")
-    val fromLocalProps: String? = if (localPropsFile.exists()) {
-        FileInputStream(localPropsFile).use { stream ->
-            Properties().apply { load(stream) }
-                .getProperty("GEMINI_API_KEY")
-                ?.takeIf { it.isNotBlank() }
-        }
-    } else null
-
-    val rawKey = fromLocalProps
-        ?: System.getenv("GEMINI_API_KEY")?.takeIf { it.isNotBlank() }
-        ?: throw GradleException(
-            "GEMINI_API_KEY missing. Set it in local.properties (e.g. " +
-                "GEMINI_API_KEY=AIza...) or export it as an environment " +
-                "variable before building. See CONTRIBUTING.md."
-        )
-
-    require(rawKey.none { it == '\n' || it == '\r' }) {
-        "GEMINI_API_KEY contains a newline character — clean it up in local.properties."
-    }
-    rawKey
-}
-
-// Escape backslash and double-quote so the key survives buildConfigField's
-// verbatim Java-source interpolation. Without this, a key containing `"`
-// or `\` would produce a Java compile error rather than the friendly
-// GradleException above.
-val geminiApiKeyForBuildConfig: String = resolvedGeminiApiKey
-    .replace("\\", "\\\\")
-    .replace("\"", "\\\"")
-
-// ─── SERP_API_KEY resolution (Epic 9 Story 9.1) ──────────────────────────
-// Optional secondary fact-check source. Same lookup order as GEMINI_API_KEY
-// (local.properties → env var) but DOES NOT fail the build when missing —
-// SerpAPI is graceful-degradation per Epic 9 plan: empty key → pipeline
-// skips SerpAPI entirely + uses Gemini-only verdict. Contributors without
-// a SerpAPI account can build and run the app normally.
-val resolvedSerpApiKey: String = run {
-    val localPropsFile = rootProject.file("local.properties")
-    val fromLocalProps: String? = if (localPropsFile.exists()) {
-        FileInputStream(localPropsFile).use { stream ->
-            Properties().apply { load(stream) }
-                .getProperty("SERP_API_KEY")
-                ?.takeIf { it.isNotBlank() }
-        }
-    } else null
-
-    fromLocalProps
-        ?: System.getenv("SERP_API_KEY")?.takeIf { it.isNotBlank() }
-        ?: ""
-}.also { key ->
-    require(key.none { it == '\n' || it == '\r' }) {
-        "SERP_API_KEY contains a newline character — clean it up in local.properties."
-    }
-}
-
-val serpApiKeyForBuildConfig: String = resolvedSerpApiKey
-    .replace("\\", "\\\\")
-    .replace("\"", "\\\"")
+// ─── Legacy API key resolution removed (Story 10.1) ──────────────────────
+// Pre-Story-10.1, `GEMINI_API_KEY` + `SERP_API_KEY` were parsed here from
+// `local.properties` / env vars and baked into `BuildConfig` constants —
+// the dev's API key shipped inside every distributed APK, depleting the
+// Gemini free-tier quota across testers + leaking on dezip. Story 10.1
+// removed both resolution blocks ; users now enter their own keys via
+// the new Paramètres tab, which persists them in SecureStorage and
+// surfaces them at request time via `apiKeyProvider` lambdas wired in
+// `AppContainer`. The build succeeds without any API key env vars set.
+//
+// Note for contributors : `local.properties` entries `GEMINI_API_KEY=...`
+// or `SERP_API_KEY=...` are silently ignored after this story — they are
+// no longer parsed. Configure your keys in-app at first launch instead.
 
 // ─── RELEASE_KEYSTORE_* resolution (D2.10, D5.4, Story 7.3) ──────────────
 // CI populates four env vars from GitHub Secrets; `release.yml` decodes the
@@ -221,12 +171,11 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // Story 1.9 reads this from BuildConfig.GEMINI_API_KEY.
-        buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKeyForBuildConfig\"")
-
-        // Epic 9 Story 9.1 — SerpAPI key (optional, empty = SerpAPI disabled).
-        // SerpApiClient reads this from BuildConfig.SERP_API_KEY.
-        buildConfigField("String", "SERP_API_KEY", "\"$serpApiKeyForBuildConfig\"")
+        // Story 10.1 — GEMINI_API_KEY + SERP_API_KEY buildConfigField
+        // declarations dropped. User-entered keys now persist via
+        // SecureStorage + flow into GeminiClient / SerpApiClient via
+        // apiKeyProvider lambdas wired in AppContainer. The release APK
+        // ships with NO embedded API keys.
 
         // Story 2.2 — toggles the AnchoredDetailPanel between the
         // edge-anchored override (false) and the stock M3 ModalBottomSheet

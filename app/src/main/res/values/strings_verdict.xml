@@ -89,6 +89,13 @@
     <string name="flash_not_found_word">INTROUVABLE</string>
     <string name="flash_not_found_headline">Ce verdict n\'est plus dans l\'historique.</string>
 
+    <!-- Story 10.1 — FailureState.NoApiKey flash variant for the "user
+         has not configured a Gemini API key" path (warm-gold accentPulse
+         palette, transient operator-error semantics). French baseline
+         per Story 7.5 AC #3. -->
+    <string name="flash_no_api_key_word">CLÉ MANQUANTE</string>
+    <string name="flash_no_api_key_headline">Configure ta clé Gemini dans Paramètres.</string>
+
     <!-- Story 3.3 + Story 7.5 C1 — FailureState contentDescriptions for TalkBack
          on the bubble surface (NFR12, UX-DR18). Pattern matches "Verdict :
          {label}" from the existing verdict contentDescriptions; here we use
@@ -99,5 +106,6 @@
     <string name="bubble_state_quota_exhausted_content_description">État : service indisponible</string>
     <string name="bubble_state_possible_injection_content_description">État : injection possible détectée</string>
     <string name="bubble_state_not_found_content_description">État : introuvable</string>
+    <string name="bubble_state_no_api_key_content_description">État : clé API manquante</string>
 
 </resources>

@@ -1,7 +1,6 @@
 package com.verisphere.app.ui.history
 
 import android.content.res.Configuration
-import android.text.format.DateUtils
 import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -24,7 +23,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -72,7 +70,8 @@ import com.verisphere.app.ui.theme.VeriSphereTheme
  *    `maxLines = 1` + `TextOverflow.Ellipsis`.
  *  - 12 dp gap.
  *  - Trailing relative timestamp in `labelMedium` `onSurfaceVariant`
- *    via [relativeTimestamp] (locale-aware `DateUtils.getRelativeTimeSpanString`).
+ *    via [relativeTimestamp] (French pure-helper [formatRelativeFrench] per
+ *    Story 10.1 polish 2026-05-20 — was system-locale `DateUtils`).
  *
  * **Accessibility** (UX-DR18, NFR12) — the row's children are merged via
  * `Modifier.semantics(mergeDescendants = true)` so TalkBack announces
@@ -227,48 +226,61 @@ private fun verdictContentDescriptionFor(label: VerdictLabel): Int = when (label
 }
 
 /**
- * Locale-aware abbreviated relative timestamp for the trailing slot of
- * [HistoryItemRow].
+ * French relative timestamp for the trailing slot of [HistoryItemRow].
  *
- * `minResolution = MINUTE_IN_MILLIS` — coarsest readable unit; very
- * recent verdicts read as "0 m" (acceptable per UX-DR9 — a history row
- * is a "past" record, not a real-time clock).
+ * **Story 10.1 polish 2026-05-20** — replaced `DateUtils.getRelativeTimeSpanString`
+ * with a pure-Kotlin formatter. The Android API uses
+ * `Locale.getDefault()` internally — on an en-US system locale (e.g.
+ * the default AVD) it emits "9 min. ago" mixed with French elsewhere
+ * in the app. Per Story 7.5 C6 the V1 baseline ships French regardless
+ * of system locale, so we format ourselves.
  *
- * `FORMAT_ABBREV_RELATIVE` — yields "2 m" / "3 h" / "5 d" / "2 mo" /
- * "1 y" instead of "2 minutes ago" / "3 hours ago". UX-DR9 cited "2 h
- * ago" / "3 d ago" descriptively; the abbreviated form fits
- * `labelMedium` (12 sp) without wrapping at standard widths.
+ * **Format** (UX-DR9 abbreviated, ≤ ~12 chars to fit `labelMedium` at
+ * 12 sp without wrapping) :
+ *  - `< 60 s` → `"à l'instant"`
+ *  - `< 60 min` → `"il y a N min"`
+ *  - `< 24 h` → `"il y a N h"`
+ *  - `< 7 j` → `"il y a N j"`
+ *  - `< 30 j` → `"il y a N sem"`
+ *  - `< 12 mois` → `"il y a N mois"`
+ *  - else → `"il y a N an"` / `"il y a N ans"` (plural ≥ 2)
  *
- * **Patch P1 (code review 2026-05-14)** — Locale-flip recomposition fix:
- * keys [remember] on `LocalConfiguration.current.locales[0]` so a system
- * locale change invalidates the cached string. Previously a bare
- * `LocalContext.current` was read but did not invalidate the
- * `remember(timestampMs)` cache, so French users would see stale
- * English formatting until the row was re-entered.
+ * **Defensive future-timestamp clamp** (Story 4.2 patch P2) : a
+ * clock-skew record renders as `"à l'instant"` rather than `"il y a -5
+ * min"`.
  *
- * **Patch P2 (code review 2026-05-14)** — Defensive future-timestamp
- * clamp: a clock-skew record (device clock moved backward) would
- * otherwise produce "in 5 m" strings UX never specced. Clamp to `now`
- * so future timestamps render as "0 m".
- *
- * `remember(timestampMs, locale)` keeps the string stable per record
- * across composition while upstream `Content(records)` re-emits cause
- * a fresh formatting pass naturally (no 1-minute ticker — Story 4.1 D5
- * + spec CDN#2 both forbid it).
+ * `remember(timestampMs)` keeps the string stable per record across
+ * composition while upstream `Content(records)` re-emits cause a fresh
+ * formatting pass naturally (no 1-minute ticker — Story 4.1 D5 + spec
+ * CDN#2 both forbid it).
  */
 @Composable
 private fun relativeTimestamp(timestampMs: Long): String {
-    val locale = LocalConfiguration.current.locales[0]
-    return remember(timestampMs, locale) {
+    return remember(timestampMs) {
         val now = System.currentTimeMillis()
         val safeTime = if (timestampMs > now) now else timestampMs
-        DateUtils.getRelativeTimeSpanString(
-            safeTime,
-            now,
-            DateUtils.MINUTE_IN_MILLIS,
-            DateUtils.FORMAT_ABBREV_RELATIVE,
-        ).toString()
+        formatRelativeFrench(now - safeTime)
     }
+}
+
+/**
+ * Pure helper backing [relativeTimestamp]. Internal so JVM tests can
+ * cover the unit boundaries without booting Compose. Each branch
+ * returns a single-line, ≤ 12-char French phrase.
+ */
+internal fun formatRelativeFrench(elapsedMs: Long): String {
+    if (elapsedMs < 60_000L) return "à l'instant"
+    val minutes = elapsedMs / 60_000L
+    if (minutes < 60L) return "il y a $minutes min"
+    val hours = minutes / 60L
+    if (hours < 24L) return "il y a $hours h"
+    val days = hours / 24L
+    if (days < 7L) return "il y a $days j"
+    if (days < 30L) return "il y a ${days / 7L} sem"
+    val months = days / 30L
+    if (months < 12L) return "il y a $months mois"
+    val years = days / 365L
+    return if (years <= 1L) "il y a 1 an" else "il y a $years ans"
 }
 
 // ─── @Preview catalogue (Task 7 — 12 previews) ────────────────────────

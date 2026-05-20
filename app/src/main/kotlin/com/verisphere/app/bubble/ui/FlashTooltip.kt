@@ -346,6 +346,7 @@ internal fun failureFlashWordResFor(failure: BubbleState.FailureState): Int = wh
     is BubbleState.FailureState.QuotaExhausted -> R.string.flash_quota_exhausted_word
     is BubbleState.FailureState.PossibleInjection -> R.string.flash_possible_injection_word
     is BubbleState.FailureState.NotFound -> R.string.flash_not_found_word
+    is BubbleState.FailureState.NoApiKey -> R.string.flash_no_api_key_word
 }
 
 /**
@@ -361,6 +362,7 @@ internal fun failureFlashHeadlineResFor(failure: BubbleState.FailureState): Int 
     is BubbleState.FailureState.QuotaExhausted -> R.string.flash_quota_exhausted_headline
     is BubbleState.FailureState.PossibleInjection -> R.string.flash_possible_injection_headline
     is BubbleState.FailureState.NotFound -> R.string.flash_not_found_headline
+    is BubbleState.FailureState.NoApiKey -> R.string.flash_no_api_key_headline
 }
 
 /**
@@ -378,6 +380,10 @@ internal fun failureBackgroundFor(failure: BubbleState.FailureState): Int = when
     is BubbleState.FailureState.QuotaExhausted -> R.color.vs_verdict_non_verifiable
     is BubbleState.FailureState.PossibleInjection -> R.color.vs_verdict_doubtful
     is BubbleState.FailureState.NotFound -> R.color.vs_verdict_non_verifiable
+    // Story 10.1 — warm-gold accentPulse mirrors the transient-operator-
+    // error semantics shared with Timeout / QuotaExhausted (vs hostile
+    // failure or "not found" benign state).
+    is BubbleState.FailureState.NoApiKey -> R.color.vs_accent_pulse
 }
 
 /**
@@ -403,6 +409,7 @@ internal fun failureHeadlineColorFor(failure: BubbleState.FailureState): Int = w
     is BubbleState.FailureState.QuotaExhausted -> R.color.vs_on_verdict_non_verifiable
     is BubbleState.FailureState.PossibleInjection -> R.color.vs_on_verdict_doubtful
     is BubbleState.FailureState.NotFound -> R.color.vs_on_verdict_non_verifiable
+    is BubbleState.FailureState.NoApiKey -> R.color.vs_on_accent_pulse
 }
 
 /**
@@ -417,6 +424,7 @@ internal fun failureContentDescriptionFor(failure: BubbleState.FailureState): In
     is BubbleState.FailureState.QuotaExhausted -> R.string.bubble_state_quota_exhausted_content_description
     is BubbleState.FailureState.PossibleInjection -> R.string.bubble_state_possible_injection_content_description
     is BubbleState.FailureState.NotFound -> R.string.bubble_state_not_found_content_description
+    is BubbleState.FailureState.NoApiKey -> R.string.bubble_state_no_api_key_content_description
 }
 
 /**
@@ -448,6 +456,7 @@ private fun failureFlashTextColorFor(failure: BubbleState.FailureState): Color =
     is BubbleState.FailureState.DailyLimit,
     is BubbleState.FailureState.QuotaExhausted,
     is BubbleState.FailureState.NotFound -> colorResource(R.color.vs_on_verdict_non_verifiable)
+    is BubbleState.FailureState.NoApiKey -> colorResource(R.color.vs_on_accent_pulse)
 }
 
 /**

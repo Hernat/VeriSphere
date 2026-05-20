@@ -450,14 +450,35 @@ class GeminiClientTest {
         )
     }
 
+    // ─── Story 10.1 — NotConfigured short-circuit ────────────────────
+
+    @Test
+    fun `verify returns NotConfigured when apiKeyProvider returns blank`() = runTest {
+        val client = newClient(apiKey = "")
+        val outcome = client.verify(SAMPLE_FRAME)
+        assertEquals(Failure.NotConfigured, outcome)
+        // Verify the MockWebServer recorded no request — the short-circuit
+        // happens BEFORE any network call.
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `verify returns NotConfigured when apiKeyProvider returns whitespace only`() = runTest {
+        val client = newClient(apiKey = "   \t  ")
+        val outcome = client.verify(SAMPLE_FRAME)
+        assertEquals(Failure.NotConfigured, outcome)
+        assertEquals(0, server.requestCount)
+    }
+
     // ─── helpers ─────────────────────────────────────────────────────
 
     private fun newClient(
         httpClient: OkHttpClient = defaultHttpClient(),
         endpointBase: String = server.url("/v1beta/models").toString().trimEnd('/'),
+        apiKey: String = "test-key-no-such-thing",
     ): GeminiClient = GeminiClient(
         httpClient = httpClient,
-        apiKey = "test-key-no-such-thing",
+        apiKeyProvider = { apiKey },
         model = "test-model",
         endpointBase = endpointBase,
         systemPromptProvider = { TEST_SYSTEM_PROMPT },

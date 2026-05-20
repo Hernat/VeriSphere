@@ -204,6 +204,8 @@ class MainActivityFirstLaunchTest {
         return OnboardingOrchestrator(
             readBoolean = storage::readBoolean,
             writeBoolean = storage::writeBoolean,
+            readString = storage::readString,
+            writeString = storage::writeString,
         )
     }
 

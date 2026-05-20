@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -50,6 +51,9 @@ import com.verisphere.app.ui.onboarding.OnboardingTutorialOverlay
 import com.verisphere.app.ui.onboarding.PermissionExplanationScreen
 import com.verisphere.app.ui.onboarding.PermissionVariant
 import com.verisphere.app.ui.onboarding.isHostileOem
+import com.verisphere.app.ui.settings.SettingsScreen
+import com.verisphere.app.ui.shell.AppShell
+import com.verisphere.app.ui.shell.AppTab
 import com.verisphere.app.ui.theme.VeriSphereTheme
 import com.verisphere.app.util.tag
 import kotlinx.coroutines.Dispatchers
@@ -128,6 +132,14 @@ class MainActivity : ComponentActivity() {
     // Dispatchers.IO (CDN #5).
     private var batteryOptimizationPrompted: Boolean by mutableStateOf(false)
 
+    // Story 10.1 — user-entered Gemini API key. Synchronously seeded in
+    // onCreate (mirrors the P1 sync-seed pattern from Story 5.2) to
+    // eliminate first-frame flicker between Settings/History tab on
+    // returning users. Re-read in onResume defensively (user may clear
+    // via system Settings → Storage). Drives the AppShell's initialTab
+    // soft-redirect (AC #11) + the SettingsScreen first-launch banner.
+    private var userGeminiKey: String by mutableStateOf("")
+
     // Story 2.4 — Detail panel state. The bubble service routes a tap
     // here via Intent.ACTION_VIEW + EXTRA_SESSION_ID; onCreate /
     // onNewIntent parse it into pendingDetailSessionId; onResume's
@@ -156,11 +168,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        secureStorage = (application as VeriSphereApplication).container.secureStorage
-        orchestrator = OnboardingOrchestrator(
-            readBoolean = secureStorage::readBoolean,
-            writeBoolean = secureStorage::writeBoolean,
-        )
+        val container = (application as VeriSphereApplication).container
+        secureStorage = container.secureStorage
+        // Story 10.1 — consume the shared orchestrator instance from
+        // AppContainer (single source of truth — also feeds the
+        // SettingsViewModel + the GeminiClient/SerpApiClient
+        // apiKeyProvider lambdas).
+        orchestrator = container.onboardingOrchestrator
 
         overlayGranted = Settings.canDrawOverlays(this)
         accessibilityServiceEnabled = isAccessibilityServiceEnabled()
@@ -183,6 +197,17 @@ class MainActivity : ComponentActivity() {
         // returning users on hostile OEMs who already dismissed the
         // sheet).
         batteryOptimizationPrompted = orchestrator.isBatteryOptimizationPrompted()
+        // Story 10.1 — same sync-seed pattern for the user-entered
+        // Gemini key. Drives the AppShell initialTab soft-redirect
+        // (AC #11) + the SettingsScreen first-launch banner.
+        //
+        // P3 (2026-05-20 code-review) — wrap in runCatching to defuse
+        // Keystore decrypt exceptions after factory-reset-restore or
+        // Tink key corruption. Empty fallback routes the user to the
+        // Settings tab + first-launch banner (same as fresh-install).
+        userGeminiKey = runCatching {
+            orchestrator.readUserGeminiApiKey().orEmpty()
+        }.getOrDefault("")
 
         setContent {
             VeriSphereTheme {
@@ -261,28 +286,79 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 null
                             }
-                            HistoryScreen(
-                                // Story 4.4 — tapping a history row
-                                // resolves the record via
-                                // `HistoryRepository.getById` and
-                                // mounts the same `DetailPanelHost`
-                                // used by the Verdict×Tap path
-                                // (Story 2.4), satisfying FR17
-                                // (read-only re-open) + FR18 (offline
-                                // history; in-memory cache).
-                                onItemClick = ::openHistoryRecord,
-                                onBackClick = ::finish,
-                                // Story 6.3 — CDN #11 the download
-                                // URL is captured from the SAME
-                                // payload that drove the banner's
-                                // render, NOT re-read from the flow
-                                // at click time (defends torn-read
-                                // race against a concurrent
-                                // VersionChecker mutation).
-                                updateBanner = bannerPayload,
-                                onUpdateBannerDismiss = ::onUpdateBannerDismiss,
-                                onUpdateBannerDownload = {
-                                    onUpdateBannerDownload(bannerPayload?.downloadUrl)
+                            // Story 10.1 — AppShell hosts the 2-tab
+                            // NavigationBar (Historique + Paramètres).
+                            // The effective tab is the user's manual
+                            // choice (if any — preserved across config
+                            // changes via rememberSaveable) OR the
+                            // derived default (SETTINGS when no Gemini
+                            // key configured, else HISTORY).
+                            //
+                            // P1 (2026-05-20 code-review) — pattern
+                            // moved here from AppShell's internal
+                            // rememberSaveable to defuse the stale-
+                            // saveable bug : a user with a configured
+                            // key whose process was killed while on
+                            // Paramètres would otherwise land back on
+                            // Paramètres after restore (the saveable
+                            // bundle held SETTINGS even though the
+                            // derived default flipped to HISTORY).
+                            // Hoisting lets MainActivity own the
+                            // "manual override vs. derived default"
+                            // composition explicitly.
+                            var manualTabChoice: AppTab? by rememberSaveable {
+                                mutableStateOf(null)
+                            }
+                            val effectiveTab = manualTabChoice
+                                ?: if (userGeminiKey.isBlank()) {
+                                    AppTab.SETTINGS
+                                } else {
+                                    AppTab.HISTORY
+                                }
+                            AppShell(
+                                selectedTab = effectiveTab,
+                                onSelectTab = { manualTabChoice = it },
+                                historyContent = {
+                                    HistoryScreen(
+                                        // Story 4.4 — tapping a history row
+                                        // resolves the record via
+                                        // `HistoryRepository.getById` and
+                                        // mounts the same `DetailPanelHost`
+                                        // used by the Verdict×Tap path
+                                        // (Story 2.4), satisfying FR17
+                                        // (read-only re-open) + FR18 (offline
+                                        // history; in-memory cache).
+                                        onItemClick = ::openHistoryRecord,
+                                        onBackClick = ::finish,
+                                        // Story 6.3 — CDN #11 the download
+                                        // URL is captured from the SAME
+                                        // payload that drove the banner's
+                                        // render, NOT re-read from the flow
+                                        // at click time (defends torn-read
+                                        // race against a concurrent
+                                        // VersionChecker mutation).
+                                        updateBanner = bannerPayload,
+                                        onUpdateBannerDismiss = ::onUpdateBannerDismiss,
+                                        onUpdateBannerDownload = {
+                                            onUpdateBannerDownload(bannerPayload?.downloadUrl)
+                                        },
+                                    )
+                                },
+                                settingsContent = {
+                                    SettingsScreen(
+                                        onKeysSaved = {
+                                            // Refresh the Compose state so the
+                                            // first-launch banner unmounts the
+                                            // moment the save completes.
+                                            // P3 — Keystore-exception guard.
+                                            userGeminiKey = runCatching {
+                                                orchestrator
+                                                    .readUserGeminiApiKey()
+                                                    .orEmpty()
+                                            }.getOrDefault("")
+                                        },
+                                        showFirstLaunchBanner = userGeminiKey.isBlank(),
+                                    )
                                 },
                             )
                         }
@@ -517,6 +593,15 @@ class MainActivity : ComponentActivity() {
         // user dismissed it).
         batteryOptimizationPrompted = batteryOptimizationPrompted ||
             orchestrator.isBatteryOptimizationPrompted()
+
+        // Story 10.1 — defensive re-read in case the user cleared the
+        // app data via system Settings → Apps → Storage → Clear Data
+        // between resumes. NOT sticky-OR because a cleared key SHOULD
+        // flip the banner back on (the user explicitly removed it).
+        // P3 — same Keystore-exception guard as the onCreate seed.
+        userGeminiKey = runCatching {
+            orchestrator.readUserGeminiApiKey().orEmpty()
+        }.getOrDefault("")
 
         // Story 5.2 code-review P8 — reset the Settings-launch debounce
         // every time the user returns to MainActivity (from any Settings

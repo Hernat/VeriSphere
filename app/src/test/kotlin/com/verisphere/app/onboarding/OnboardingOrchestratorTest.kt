@@ -2,8 +2,11 @@ package com.verisphere.app.onboarding
 
 import com.verisphere.app.onboarding.OnboardingOrchestrator.Companion.KEY_BATTERY_OPTIMIZATION_PROMPTED
 import com.verisphere.app.onboarding.OnboardingOrchestrator.Companion.KEY_TUTORIAL_SEEN
+import com.verisphere.app.onboarding.OnboardingOrchestrator.Companion.KEY_USER_GEMINI_API_KEY
+import com.verisphere.app.onboarding.OnboardingOrchestrator.Companion.KEY_USER_SERP_API_KEY
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -43,10 +46,33 @@ class OnboardingOrchestratorTest {
         fun get(key: String): Boolean? = map[key]
     }
 
-    private fun newOrchestrator(store: FakeBooleanStore) = OnboardingOrchestrator(
-        readBoolean = store::read,
-        writeBoolean = store::write,
+    /**
+     * Story 10.1 — String-keyed sibling of [FakeBooleanStore] used to
+     * back the new [OnboardingOrchestrator.readString] / [OnboardingOrchestrator.writeString]
+     * lambda seam. Returns `null` for absent keys (matches the
+     * SecureStorage contract surfaced by `readString`).
+     */
+    private class FakeStringStore {
+        private val map = mutableMapOf<String, String>()
+        fun read(key: String): String? = map[key]
+        fun write(key: String, value: String) {
+            map[key] = value
+        }
+
+        fun get(key: String): String? = map[key]
+    }
+
+    private fun newOrchestrator(
+        boolStore: FakeBooleanStore = FakeBooleanStore(),
+        stringStore: FakeStringStore = FakeStringStore(),
+    ) = OnboardingOrchestrator(
+        readBoolean = boolStore::read,
+        writeBoolean = boolStore::write,
+        readString = stringStore::read,
+        writeString = stringStore::write,
     )
+
+    private fun newOrchestrator(store: FakeBooleanStore) = newOrchestrator(boolStore = store)
 
     @Test
     fun `isTutorialSeen returns false when storage flag is absent`() {
@@ -144,5 +170,73 @@ class OnboardingOrchestratorTest {
         orch.markBatteryOptimizationPrompted()
         assertEquals(true, store.get(KEY_BATTERY_OPTIMIZATION_PROMPTED))
         assertFalse(orch.isTutorialSeen())
+    }
+
+    // ─── Story 10.1 — user-API-key flags ────────────────────────────
+
+    @Test
+    fun `readUserGeminiApiKey returns null when storage is empty`() {
+        val orch = newOrchestrator()
+        assertNull(orch.readUserGeminiApiKey())
+    }
+
+    @Test
+    fun `writeUserGeminiApiKey then readUserGeminiApiKey round-trip`() {
+        val stringStore = FakeStringStore()
+        val orch = newOrchestrator(stringStore = stringStore)
+        orch.writeUserGeminiApiKey("AIza-test-key-1234567890ABCDEFGHIJ")
+        assertEquals("AIza-test-key-1234567890ABCDEFGHIJ", orch.readUserGeminiApiKey())
+        assertEquals("AIza-test-key-1234567890ABCDEFGHIJ", stringStore.get(KEY_USER_GEMINI_API_KEY))
+    }
+
+    @Test
+    fun `readUserSerpApiKey returns null when storage is empty`() {
+        val orch = newOrchestrator()
+        assertNull(orch.readUserSerpApiKey())
+    }
+
+    @Test
+    fun `writeUserSerpApiKey then readUserSerpApiKey round-trip`() {
+        val stringStore = FakeStringStore()
+        val orch = newOrchestrator(stringStore = stringStore)
+        orch.writeUserSerpApiKey("serp-test-token-xyz")
+        assertEquals("serp-test-token-xyz", orch.readUserSerpApiKey())
+        assertEquals("serp-test-token-xyz", stringStore.get(KEY_USER_SERP_API_KEY))
+    }
+
+    @Test
+    fun `writeUserGeminiApiKey does not touch SerpAPI key`() {
+        // Cross-key isolation — both keys share the SecureStorage prefs
+        // file; a cross-write bug would silently leak Gemini bytes into
+        // the SerpAPI URL parameter (or vice-versa) at request time.
+        val stringStore = FakeStringStore()
+        val orch = newOrchestrator(stringStore = stringStore)
+        orch.writeUserGeminiApiKey("AIza-gemini-only")
+        assertEquals("AIza-gemini-only", stringStore.get(KEY_USER_GEMINI_API_KEY))
+        assertNull(stringStore.get(KEY_USER_SERP_API_KEY))
+        assertNull(orch.readUserSerpApiKey())
+    }
+
+    @Test
+    fun `writeUserSerpApiKey does not touch Gemini key`() {
+        val stringStore = FakeStringStore()
+        val orch = newOrchestrator(stringStore = stringStore)
+        orch.writeUserSerpApiKey("serp-only")
+        assertEquals("serp-only", stringStore.get(KEY_USER_SERP_API_KEY))
+        assertNull(stringStore.get(KEY_USER_GEMINI_API_KEY))
+        assertNull(orch.readUserGeminiApiKey())
+    }
+
+    @Test
+    fun `writing API keys does not touch boolean flags`() {
+        // The String + Boolean stores are independent — verify the
+        // 4-lambda seam keeps them isolated even under cross-type writes.
+        val boolStore = FakeBooleanStore()
+        val stringStore = FakeStringStore()
+        val orch = newOrchestrator(boolStore = boolStore, stringStore = stringStore)
+        orch.writeUserGeminiApiKey("AIza-foo")
+        orch.writeUserSerpApiKey("serp-bar")
+        assertFalse(orch.isTutorialSeen())
+        assertFalse(orch.isBatteryOptimizationPrompted())
     }
 }

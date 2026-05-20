@@ -207,5 +207,23 @@ sealed interface BubbleState {
          * `BubbleStateMachine` stays Service-private).
          */
         data class NotFound(val tooltipFaded: Boolean = false) : FailureState
+
+        /**
+         * Story 10.1 — the user has not configured a Gemini API key in
+         * the Paramètres tab (or has explicitly cleared it).
+         * [com.verisphere.app.gemini.GeminiClient.verify] short-circuits
+         * to [com.verisphere.app.gemini.VerificationOutcome.Failure.NotConfigured]
+         * BEFORE any network call ; [com.verisphere.app.bubble.BubbleStateMachine.mapFailureToState]
+         * maps that outcome to this variant.
+         *
+         * Renders the `⚠️ CLÉ MANQUANTE · Configure ta clé Gemini dans
+         * Paramètres.` flash on the warm-gold `accentPulse` palette
+         * (same token as [Timeout] / [QuotaExhausted] — transient
+         * operator-error semantics, not hostile system failure). Carries
+         * no [SessionRecord] (the verify never ran). Not tap-actionable
+         * — mirrors the non-clickable convention shared with [NotFound]
+         * + the other failures that are not [PossibleInjection].
+         */
+        data class NoApiKey(val tooltipFaded: Boolean = false) : FailureState
     }
 }

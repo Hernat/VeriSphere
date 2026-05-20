@@ -149,5 +149,19 @@ sealed class VerificationOutcome {
          * [ApiQuotaExhausted] only.
          */
         data class HttpError(val code: Int) : Failure()
+
+        /**
+         * Story 10.1 — the user has not configured a Gemini API key in
+         * the new Paramètres tab (or has explicitly cleared it). The
+         * `GeminiClient.verify()` short-circuits to this variant
+         * BEFORE any network call when `apiKeyProvider()` returns a
+         * blank string. Mirrors [com.verisphere.app.serp.SerpOutcome.Failure.NotConfigured]
+         * pattern. Story 10.1 maps this to `BubbleState.FailureState.NoApiKey`
+         * rendering the `⚠️ CLÉ MANQUANTE · Configure ta clé Gemini
+         * dans Paramètres.` flash on the warm-gold `accentPulse`
+         * palette (same token as [Timeout] / [ApiQuotaExhausted] —
+         * transient operator-error semantics, not hostile failure).
+         */
+        data object NotConfigured : Failure()
     }
 }

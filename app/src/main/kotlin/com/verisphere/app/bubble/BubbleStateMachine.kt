@@ -159,6 +159,7 @@ class BubbleStateMachine(
             is BubbleState.FailureState.QuotaExhausted -> current.copy(tooltipFaded = true)
             is BubbleState.FailureState.PossibleInjection -> current.copy(tooltipFaded = true)
             is BubbleState.FailureState.NotFound -> current.copy(tooltipFaded = true)
+            is BubbleState.FailureState.NoApiKey -> current.copy(tooltipFaded = true)
             // Stale timer from a previous Idle / Verdict / FailureState
             // period: a transient state (Pressing / Capturing / Thinking)
             // MUST NOT be flipped back to faded-Idle by a stale fade timer.
@@ -263,6 +264,13 @@ class BubbleStateMachine(
         VerificationOutcome.Failure.Timeout -> BubbleState.FailureState.Timeout()
         VerificationOutcome.Failure.DailyLimitReached -> BubbleState.FailureState.DailyLimit()
         VerificationOutcome.Failure.ApiQuotaExhausted -> BubbleState.FailureState.QuotaExhausted()
+        // Story 10.1 — user has not configured a Gemini API key in the
+        // new Paramètres tab (or has explicitly cleared it). GeminiClient
+        // short-circuits to this outcome BEFORE any network call. The
+        // BubbleState.FailureState.NoApiKey variant surfaces the
+        // "CLÉ MANQUANTE · Configure ta clé Gemini dans Paramètres."
+        // flash on the warm-gold accentPulse palette.
+        VerificationOutcome.Failure.NotConfigured -> BubbleState.FailureState.NoApiKey()
         // Silent buckets — UX-DR15. Returning Idle(faded=false) preserves
         // the Story 1.10 minimal-mapping contract for these branches AND
         // keeps the existing adaptive-presence fade re-arm side-effect
@@ -381,6 +389,9 @@ class BubbleStateMachine(
             // DailyLimit / QuotaExhausted pattern).
             is BubbleState.FailureState.NotFound ->
                 !next.tooltipFaded && previous !is BubbleState.FailureState.NotFound
+            // Story 10.1 — NoApiKey carries no record, same pattern.
+            is BubbleState.FailureState.NoApiKey ->
+                !next.tooltipFaded && previous !is BubbleState.FailureState.NoApiKey
             else -> false
         }
         if (enteredFreshTooltip) {

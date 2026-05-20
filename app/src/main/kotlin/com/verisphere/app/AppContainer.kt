@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Base64
 import androidx.annotation.VisibleForTesting
 import com.verisphere.app.gemini.GeminiClient
+import com.verisphere.app.onboarding.OnboardingOrchestrator
 import com.verisphere.app.serp.SerpApiClient
 import com.verisphere.app.serp.SerpQuotaGate
 import com.verisphere.app.storage.HistoryRepository
@@ -56,6 +57,27 @@ class AppContainer(private val applicationContext: Context) {
         RateLimitRepositoryImpl(
             readLong = secureStorage::readLong,
             writeLong = secureStorage::writeLong,
+        )
+    }
+
+    /**
+     * Story 10.1 — shared [OnboardingOrchestrator] instance.
+     *
+     * Pre-Story-10.1, `MainActivity` constructed its own orchestrator
+     * locally. The Settings tab introduced in Story 10.1 needs a second
+     * consumer (the `SettingsViewModel` reads/writes the user API
+     * keys), so the construction moves into the container to enforce a
+     * single source of truth. The same instance also backs the
+     * `apiKeyProvider` lambdas on [geminiClient] + [serpApiClient]
+     * below so a Settings → Save → next bubble long-press picks up the
+     * freshest stored key.
+     */
+    val onboardingOrchestrator: OnboardingOrchestrator by lazy {
+        OnboardingOrchestrator(
+            readBoolean = secureStorage::readBoolean,
+            writeBoolean = secureStorage::writeBoolean,
+            readString = secureStorage::readString,
+            writeString = secureStorage::writeString,
         )
     }
 
@@ -117,6 +139,26 @@ class AppContainer(private val applicationContext: Context) {
             .use { it.readText() }
         GeminiClient(
             httpClient = httpClient,
+            // Story 10.1 — fresh-read on every verify so the user's
+            // Settings save takes effect on the next bubble long-press
+            // without a process restart. Empty / null → orEmpty() ⇒
+            // GeminiClient short-circuits to Failure.NotConfigured.
+            //
+            // P3 (2026-05-20 code-review) — wrap in runCatching to
+            // defuse Keystore decrypt exceptions (GeneralSecurityException
+            // / AEADBadTagException) that can surface after factory-reset-
+            // restore, fingerprint-enrolment-change on some OEMs, or
+            // Tink key corruption. Without this wrap, the exception
+            // propagates up through the lambda and crashes the
+            // BubbleOverlayService capture coroutine ; the user sees
+            // the bubble freeze in Capturing/Thinking with no path back
+            // to Idle. The empty-fallback routes to Failure.NotConfigured
+            // → FailureState.NoApiKey flash, which prompts the user to
+            // re-enter their key in Settings.
+            apiKeyProvider = {
+                runCatching { onboardingOrchestrator.readUserGeminiApiKey().orEmpty() }
+                    .getOrDefault("")
+            },
             systemPromptProvider = { systemPrompt },
             base64Encoder = { bytes -> Base64.encodeToString(bytes, Base64.NO_WRAP) },
         )
@@ -134,14 +176,25 @@ class AppContainer(private val applicationContext: Context) {
      * compounding pipeline-level latency). Reuses the underlying
      * dispatcher / connection pool / DNS via [OkHttpClient.newBuilder].
      *
-     * Reads `BuildConfig.SERP_API_KEY` via the client's default
-     * parameter; empty key → graceful disable.
+     * Story 10.1 — API key is now provided by a fresh-read lambda
+     * wired to [onboardingOrchestrator] (was `BuildConfig.SERP_API_KEY`
+     * via the constructor default pre-Story-10.1). Empty / null key →
+     * graceful `SerpOutcome.Failure.NotConfigured` per Epic 9 plan.
      */
     val serpApiClient: SerpApiClient by lazy {
         val serpHttpClient = httpClient.newBuilder()
             .callTimeout(SerpApiClient.CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .build()
-        SerpApiClient(httpClient = serpHttpClient)
+        SerpApiClient(
+            httpClient = serpHttpClient,
+            // P3 (2026-05-20 code-review) — same Keystore-exception guard
+            // as geminiClient ; empty-fallback degrades gracefully to
+            // SerpOutcome.Failure.NotConfigured per Epic 9 plan.
+            apiKeyProvider = {
+                runCatching { onboardingOrchestrator.readUserSerpApiKey().orEmpty() }
+                    .getOrDefault("")
+            },
+        )
     }
 
     /**

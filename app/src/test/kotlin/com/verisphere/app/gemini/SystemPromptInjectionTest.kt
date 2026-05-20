@@ -1,6 +1,5 @@
 package com.verisphere.app.gemini
 
-import com.verisphere.app.BuildConfig
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertTrue
@@ -83,15 +82,20 @@ class SystemPromptInjectionTest {
 
     @Test
     fun corpus_passes_against_live_gemini() = runBlocking {
-        // Story 7.1 code-review F12: guard against empty BuildConfig.GEMINI_API_KEY
-        // before issuing any live calls. If a developer un-@Ignore's this test in
-        // a CI environment without local.properties, an empty key would issue 30
-        // sequential 401s — burning Gemini abuse-detection counters with zero
-        // diagnostic value. Skip cleanly via Assume.
+        // Story 7.1 code-review F12 + Story 10.1 — guard against an
+        // empty Gemini API key before issuing any live calls. Source
+        // switched from `BuildConfig.GEMINI_API_KEY` to the
+        // `GEMINI_API_KEY` env var in Story 10.1 (build.gradle.kts no
+        // longer parses the key into BuildConfig). If a developer
+        // un-@Ignore's this test without exporting the env var, an
+        // empty key would issue 30 sequential 401s — burning Gemini
+        // abuse-detection counters with zero diagnostic value. Skip
+        // cleanly via Assume.
+        val envApiKey = System.getenv("GEMINI_API_KEY").orEmpty()
         Assume.assumeTrue(
-            "BuildConfig.GEMINI_API_KEY is blank — populate local.properties " +
-                "before un-@Ignore'ing this test (manual pre-release run only).",
-            BuildConfig.GEMINI_API_KEY.isNotBlank(),
+            "GEMINI_API_KEY env var is blank — export it before " +
+                "un-@Ignore'ing this test (manual pre-release run only).",
+            envApiKey.isNotBlank(),
         )
 
         val corpusText = javaClass.classLoader
@@ -141,9 +145,14 @@ class SystemPromptInjectionTest {
         // Same-package internal constant access (DEFAULT_MODEL is `internal const`
         // at GeminiClient.kt:468). java.util.Base64 mirrors what GeminiClientTest
         // L463 uses — equivalent NO_WRAP output to android.util.Base64.
+        // Story 10.1 — BuildConfig.GEMINI_API_KEY removed in T9 ; this
+        // manual @Ignore'd corpus test reuses the `envApiKey` already
+        // resolved + Assume-gated above (same source the operator sets
+        // when running the bash corpus runner per
+        // scripts/run_injection_corpus.sh).
         val client = GeminiClient(
             httpClient = httpClient,
-            apiKey = BuildConfig.GEMINI_API_KEY,
+            apiKeyProvider = { envApiKey },
             model = GeminiClient.DEFAULT_MODEL,
             systemPromptProvider = { systemPrompt },
             base64Encoder = { bytes -> Base64.getEncoder().encodeToString(bytes) },

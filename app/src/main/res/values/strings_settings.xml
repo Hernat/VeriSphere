@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Story 10.1 — Paramètres tab + AppShell navigation strings (BYOK API
+  keys + bottom-nav 2-tab shell).
+
+  French baseline per Story 7.5 AC #3 ; single `values/` locale per the
+  pre-V1 language decision. The AccessibilityExplanationScreen warm-tone
+  cadence is mirrored here for tone consistency : tu-form, ≤ 80 chars
+  per sentence, present-tense.
+-->
+<resources>
+
+    <!-- Bottom NavigationBar tab labels + contentDescriptions (TalkBack
+         per UX-DR18, NFR12). -->
+    <string name="tab_history_label">Historique</string>
+    <string name="tab_settings_label">Paramètres</string>
+    <string name="tab_history_content_description">Onglet historique des vérifications</string>
+    <string name="tab_settings_content_description">Onglet paramètres</string>
+
+    <!-- SettingsScreen editorial heading + section header. -->
+    <string name="settings_screen_title">Paramètres</string>
+    <string name="settings_section_api_keys">Clés API</string>
+
+    <!-- Gemini key field — required for the bubble to verify. -->
+    <string name="settings_gemini_key_label">Clé API Gemini</string>
+    <string name="settings_gemini_key_hint">AIza…</string>
+    <string name="settings_gemini_key_helper">Obtiens ta clé sur aistudio.google.com/apikey</string>
+    <string name="settings_gemini_key_invalid">Format invalide — la clé Gemini commence par « AIza »</string>
+    <string name="settings_gemini_key_required">Une clé Gemini est requise pour utiliser VeriSphere</string>
+
+    <!-- SerpAPI key field — optional ; empty = SerpAPI disabled. -->
+    <string name="settings_serp_key_label">Clé API SerpAPI (optionnel)</string>
+    <string name="settings_serp_key_helper">Améliore la précision avec une recherche web croisée. Obtiens ta clé sur serpapi.com/manage-api-key</string>
+
+    <!-- Field-visibility toggle + save action + snackbar. -->
+    <string name="settings_show_key">Afficher la clé</string>
+    <string name="settings_hide_key">Masquer la clé</string>
+    <string name="settings_save_cta">Sauvegarder</string>
+    <string name="settings_keys_saved">Clés sauvegardées</string>
+
+    <!-- Per-field "saved" indicator surfaced in the OutlinedTextField
+         supportingText when the current draft equals the persisted
+         value (replaces the helper text). Story 10.1 polish 2026-05-20. -->
+    <string name="settings_key_saved_indicator">✓ Sauvegardée</string>
+
+    <!-- First-launch banner shown at the top of SettingsScreen when the
+         user has not yet configured a Gemini API key. Drops itself the
+         moment `userGeminiKey` becomes non-blank (state-driven). -->
+    <string name="settings_first_launch_banner">Configure ta clé Gemini pour activer le fact-check.</string>
+
+</resources>
