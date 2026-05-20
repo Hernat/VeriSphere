@@ -8,6 +8,10 @@
     <!-- Story 1.6 — PermissionExplanationScreen (overlay-permission denial path).
          Full first-launch orchestration is Story 5.2; these strings cover the
          minimal "denied → explain → re-attempt or exit" flow. -->
+    <!-- WisprFlow refonte 2026-05-19 — title added so PermissionExplanationScreen
+         can render the editorial header pattern shared with AccessibilityExplanationScreen
+         + OnboardingTutorialOverlay (logo top, big serif title, body, bottom CTA). -->
+    <string name="permission_overlay_explanation_title">Permets à la bulle d\'apparaître par-dessus.</string>
     <string name="permission_overlay_explanation">VeriSphere a besoin de la permission \"Afficher par-dessus les autres applications\" pour afficher la bulle de fact-check pendant que tu utilises d\'autres apps.</string>
     <string name="permission_allow_overlay">Autoriser</string>
     <string name="permission_exit">Quitter</string>
