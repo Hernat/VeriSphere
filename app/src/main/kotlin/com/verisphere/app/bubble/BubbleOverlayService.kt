@@ -411,6 +411,14 @@ class BubbleOverlayService :
             shouldSkipSerp = { container.serpQuotaGate.shouldSkipSerp() },
             onSerpQuotaExceeded = { container.serpQuotaGate.markQuotaExceeded() },
             onSerpSuccess = { container.serpQuotaGate.resetQuotaGate() },
+            // Reverdict pass — second Gemini call that re-evaluates the
+            // verdict using the SerpAPI Google synthesis as the
+            // authoritative ground-truth (Google is more up-to-date than
+            // Gemini's training data, so the final verdict prioritises
+            // the live web). Deferring lambda — same reason as `verify`.
+            reverdict = { claim, markdown ->
+                container.geminiClient.reverdict(claim, markdown)
+            },
         )
 
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)

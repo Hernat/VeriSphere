@@ -2,10 +2,12 @@ package com.verisphere.app.capture
 
 import android.util.Log
 import com.verisphere.app.accessibility.VeriSphereAccessibilityService
+import com.verisphere.app.gemini.ReverdictOutcome
 import com.verisphere.app.gemini.VerificationOutcome
 import com.verisphere.app.gemini.VerificationOutcome.Failure
 import com.verisphere.app.serp.AgreementScorer
 import com.verisphere.app.serp.SerpOutcome
+import com.verisphere.app.storage.SessionRecord
 import com.verisphere.app.storage.RateLimitRepository
 import com.verisphere.app.util.tag
 import kotlinx.coroutines.CancellationException
@@ -102,6 +104,15 @@ class CapturePipeline(
     private val shouldSkipSerp: () -> Boolean = { false },
     private val onSerpQuotaExceeded: () -> Unit = {},
     private val onSerpSuccess: () -> Unit = {},
+    /**
+     * Second Gemini call — re-evaluates the verdict from the SerpAPI
+     * Google synthesis (the most up-to-date evidence). Defaults to
+     * [ReverdictOutcome.Failure] so existing tests + the legacy
+     * Gemini-only path keep working unchanged. Production wires this to
+     * [com.verisphere.app.gemini.GeminiClient.reverdict].
+     */
+    private val reverdict: suspend (claim: String, serpMarkdown: String) -> ReverdictOutcome =
+        { _, _ -> ReverdictOutcome.Failure },
 ) {
 
     /**
@@ -300,22 +311,15 @@ class CapturePipeline(
                 onSerpSuccess()
                 val cappedRefs = outcome.references.take(MAX_PERSISTED_REFS)
                 val cappedMarkdown = outcome.markdown.take(MAX_PERSISTED_MARKDOWN_CHARS)
-                val agreement = AgreementScorer.score(
-                    label = gemini.record.verdictLabel,
-                    markdown = cappedMarkdown,
+                val baseRecord = gemini.record.copy(
+                    serpReferences = cappedRefs,
+                    serpMarkdown = cappedMarkdown,
                 )
                 Log.i(
                     TAG,
-                    "SerpAPI OK (${outcome.engineUsed}) refs=${cappedRefs.size} " +
-                        "agreement=$agreement",
+                    "SerpAPI OK (${outcome.engineUsed}) refs=${cappedRefs.size}",
                 )
-                VerificationOutcome.Verdict(
-                    gemini.record.copy(
-                        serpReferences = cappedRefs,
-                        serpMarkdown = cappedMarkdown,
-                        agreement = agreement,
-                    ),
-                )
+                VerificationOutcome.Verdict(applyReverdict(baseRecord, cappedMarkdown))
             }
             SerpOutcome.Failure.Quota -> {
                 onSerpQuotaExceeded()
@@ -325,6 +329,77 @@ class CapturePipeline(
             is SerpOutcome.Failure -> {
                 Log.w(TAG, "SerpAPI failed ($outcome) — Gemini-only verdict")
                 gemini
+            }
+        }
+    }
+
+    /**
+     * Reverdict step — calls Gemini #2 with the Google synthesis as the
+     * authoritative ground-truth, then merges the re-issued verdict
+     * fields back over [baseRecord] (which still carries OCR text,
+     * extractedClaim, Gemini Search Grounding citations, SerpAPI
+     * references + markdown, injectionDetected). Agreement is recomputed
+     * AFTER the merge so the "Sources contradictoires" badge reflects
+     * the FINAL verdict vs the SerpAPI markdown, not the obsolete
+     * Gemini-1 verdict.
+     *
+     * **Skip conditions** (return the unchanged record + an agreement
+     * score against the Gemini-1 verdict) :
+     *  - [SessionRecord.injectionDetected] true — injection-tainted
+     *    captures foreground the security warning; a re-vote on
+     *    poisoned input could amplify the attack.
+     *  - blank [SessionRecord.extractedClaim] or blank [serpMarkdown] —
+     *    no signal to re-vote on (the reverdict prompt requires both
+     *    inputs to be substantive).
+     *
+     * Failure of the reverdict call (timeout, network, parse, missing
+     * API key) collapses to a Gemini-1-verdict-with-SerpAPI-context
+     * record — same graceful degradation as the SerpAPI-failure branch.
+     */
+    private suspend fun applyReverdict(
+        baseRecord: SessionRecord,
+        serpMarkdown: String,
+    ): SessionRecord {
+        if (baseRecord.injectionDetected ||
+            baseRecord.extractedClaim.isBlank() ||
+            serpMarkdown.isBlank()
+        ) {
+            Log.d(TAG, "reverdict skipped (injection/blank inputs) — Gemini-1 verdict kept")
+            return baseRecord.copy(
+                agreement = AgreementScorer.score(baseRecord.verdictLabel, serpMarkdown),
+            )
+        }
+
+        val outcome: ReverdictOutcome = try {
+            withTimeoutOrNull(REVERDICT_BUDGET) {
+                reverdict(baseRecord.extractedClaim, serpMarkdown)
+            } ?: ReverdictOutcome.Failure
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            Log.w(TAG, "reverdict threw unexpectedly — keeping Gemini-1 verdict", e)
+            ReverdictOutcome.Failure
+        }
+
+        return when (outcome) {
+            is ReverdictOutcome.Success -> {
+                Log.i(
+                    TAG,
+                    "reverdict OK ${baseRecord.verdictLabel}→${outcome.verdictLabel}",
+                )
+                baseRecord.copy(
+                    verdictLabel = outcome.verdictLabel,
+                    headline = outcome.headline,
+                    contextLines = outcome.contextLines,
+                    regionalBiasNote = outcome.regionalBiasNote,
+                    agreement = AgreementScorer.score(outcome.verdictLabel, serpMarkdown),
+                )
+            }
+            ReverdictOutcome.Failure -> {
+                Log.w(TAG, "reverdict failed — Gemini-1 verdict kept")
+                baseRecord.copy(
+                    agreement = AgreementScorer.score(baseRecord.verdictLabel, serpMarkdown),
+                )
             }
         }
     }
@@ -341,7 +416,7 @@ class CapturePipeline(
          * a successful-but-late Gemini verdict is not discarded by a
          * SERP timeout.
          */
-        val CAPTURE_TIMEOUT: Duration = 80.seconds
+        val CAPTURE_TIMEOUT: Duration = 100.seconds
 
         /**
          * Per-SerpAPI-call wall-clock ceiling enforced by [withTimeoutOrNull]
@@ -351,6 +426,14 @@ class CapturePipeline(
          * own OkHttp `callTimeout` ; both apply belt-and-braces.
          */
         val SERP_BUDGET: Duration = 15.seconds
+
+        /**
+         * Per-reverdict-call wall-clock ceiling. Text-only Gemini call
+         * (no image, no Search Grounding) is much faster than [verify] —
+         * 15 s is generous. On expiry, the pipeline falls back to the
+         * Gemini-1 verdict + SerpAPI enrichment (graceful degradation).
+         */
+        val REVERDICT_BUDGET: Duration = 15.seconds
 
         /**
          * Persistence guards (code-review F15) — keep encrypted

@@ -519,12 +519,144 @@ class CapturePipelineTest {
         )
     }
 
+    // ─── Reverdict (Gemini #2 after SerpAPI) ──────────────────────────
+
+    @Test
+    fun `reverdict Success replaces verdict label and headline`() = runTest {
+        // The user-reported scenario: Gemini #1 says FAUX, Google synthesis
+        // contradicts it, Gemini #2 (reverdict) re-issues the verdict as
+        // VRAI based on the SerpAPI markdown. The final record carries
+        // the re-issued verdict + the original OCR/extractedClaim.
+        val geminiOneRecord = sampleSessionRecord().copy(
+            verdictLabel = VerdictLabel.FALSE,
+            headline = "Le joueur n'est pas blessé.",
+            extractedClaim = "Le joueur X est blessé pour la Coupe du Monde 2026.",
+            ocrText = "raw ocr",
+        )
+        val pipeline = pipelineForSerp(
+            verifyOutcome = VerificationOutcome.Verdict(geminiOneRecord),
+            serpSearch = { _ ->
+                SerpOutcome.Success(
+                    references = listOf(
+                        SerpReference(title = "T", url = "https://example.com/news", snippet = "s"),
+                    ),
+                    markdown = "Le joueur X est officiellement forfait, blessure confirmée.",
+                    engineUsed = SerpEngine.GoogleAiMode,
+                )
+            },
+            reverdict = { _, _ ->
+                com.verisphere.app.gemini.ReverdictOutcome.Success(
+                    verdictLabel = VerdictLabel.TRUE,
+                    headline = "C'EST VRAI : la blessure est confirmée.",
+                    contextLines = listOf("Source A confirme la fracture."),
+                    regionalBiasNote = null,
+                )
+            },
+        )
+
+        val outcome = pipeline.runCapture()
+
+        val verdict = outcome as VerificationOutcome.Verdict
+        assertEquals(VerdictLabel.TRUE, verdict.record.verdictLabel)
+        assertTrue(verdict.record.headline.contains("blessure est confirmée"))
+        assertEquals("Le joueur X est blessé pour la Coupe du Monde 2026.", verdict.record.extractedClaim)
+        assertEquals("raw ocr", verdict.record.ocrText)
+    }
+
+    @Test
+    fun `reverdict Failure keeps Gemini-1 verdict and still enriches with SERP`() = runTest {
+        val baseRecord = sampleSessionRecord().copy(
+            verdictLabel = VerdictLabel.FALSE,
+            extractedClaim = "claim",
+        )
+        val pipeline = pipelineForSerp(
+            verifyOutcome = VerificationOutcome.Verdict(baseRecord),
+            serpSearch = { _ ->
+                SerpOutcome.Success(
+                    references = listOf(SerpReference(title = "T", url = "https://example.com", snippet = "s")),
+                    markdown = "Some markdown text.",
+                    engineUsed = SerpEngine.GoogleAiMode,
+                )
+            },
+            reverdict = { _, _ -> com.verisphere.app.gemini.ReverdictOutcome.Failure },
+        )
+
+        val outcome = pipeline.runCapture()
+
+        val verdict = outcome as VerificationOutcome.Verdict
+        // Falls back to Gemini-1 verdict.
+        assertEquals(VerdictLabel.FALSE, verdict.record.verdictLabel)
+        // SERP enrichment still applied.
+        assertEquals(1, verdict.record.serpReferences.size)
+        assertTrue(verdict.record.serpMarkdown.isNotBlank())
+    }
+
+    @Test
+    fun `reverdict skipped when injectionDetected is true`() = runTest {
+        // Injection-tainted captures must not feed the reverdict prompt
+        // (skip-conditions in applyReverdict). SERP is also skipped per
+        // DN2 ; nothing in the verdict record changes.
+        var reverdictCalled = false
+        val baseRecord = sampleSessionRecord().copy(
+            verdictLabel = VerdictLabel.FALSE,
+            extractedClaim = "claim",
+            injectionDetected = true,
+        )
+        val pipeline = pipelineForSerp(
+            verifyOutcome = VerificationOutcome.Verdict(baseRecord),
+            serpSearch = { _ ->
+                SerpOutcome.Success(
+                    references = emptyList(),
+                    markdown = "irrelevant",
+                    engineUsed = SerpEngine.GoogleAiMode,
+                )
+            },
+            reverdict = { _, _ ->
+                reverdictCalled = true
+                error("reverdict must NOT fire when injectionDetected=true")
+            },
+        )
+
+        pipeline.runCapture()
+
+        assertFalse("reverdict must be skipped when injectionDetected=true", reverdictCalled)
+    }
+
+    @Test
+    fun `reverdict skipped when extractedClaim is blank`() = runTest {
+        var reverdictCalled = false
+        val baseRecord = sampleSessionRecord().copy(
+            verdictLabel = VerdictLabel.FALSE,
+            extractedClaim = "",
+        )
+        val pipeline = pipelineForSerp(
+            verifyOutcome = VerificationOutcome.Verdict(baseRecord),
+            serpSearch = { _ ->
+                SerpOutcome.Success(
+                    references = listOf(SerpReference(title = "T", url = "https://example.com", snippet = "s")),
+                    markdown = "markdown",
+                    engineUsed = SerpEngine.GoogleAiMode,
+                )
+            },
+            reverdict = { _, _ ->
+                reverdictCalled = true
+                error("reverdict must NOT fire when extractedClaim is blank")
+            },
+        )
+
+        pipeline.runCapture()
+
+        assertFalse("reverdict must be skipped when extractedClaim is blank", reverdictCalled)
+    }
+
     private fun pipelineForSerp(
         verifyOutcome: VerificationOutcome,
         shouldSkipSerp: () -> Boolean = { false },
         serpSearch: suspend (String) -> SerpOutcome = { _ -> SerpOutcome.Failure.NotConfigured },
         onSerpQuotaExceeded: () -> Unit = {},
         onSerpSuccess: () -> Unit = {},
+        reverdict: suspend (String, String) -> com.verisphere.app.gemini.ReverdictOutcome =
+            { _, _ -> com.verisphere.app.gemini.ReverdictOutcome.Failure },
     ): CapturePipeline = CapturePipeline(
         rateLimitRepository = FakeRateLimitRepository(accept = true),
         hasToken = { true },
@@ -534,6 +666,7 @@ class CapturePipelineTest {
         shouldSkipSerp = shouldSkipSerp,
         onSerpQuotaExceeded = onSerpQuotaExceeded,
         onSerpSuccess = onSerpSuccess,
+        reverdict = reverdict,
     )
 
     /**
@@ -592,10 +725,10 @@ class CapturePipelineTest {
         /**
          * Real-time test timeout for the single test that exercises
          * `withTimeout` end-to-end (timeout test). Must exceed
-         * CAPTURE_TIMEOUT (currently 60s) so the real-time withTimeout
-         * fires before runTest gives up.
+         * CAPTURE_TIMEOUT (currently 100s after the reverdict bump) so
+         * the real-time withTimeout fires before runTest gives up.
          */
-        private val REAL_TIME_TEST_TIMEOUT = 90.seconds
+        private val REAL_TIME_TEST_TIMEOUT = 130.seconds
 
         fun sampleSessionRecord(): SessionRecord = SessionRecord(
             id = "test-uuid-1",

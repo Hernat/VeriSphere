@@ -105,6 +105,17 @@ class GeminiClient(
     private val endpointBase: String = ENDPOINT_BASE,
     private val systemPromptProvider: () -> String,
     /**
+     * Second-pass system prompt — fed into [reverdict] after SerpAPI
+     * surfaces a fresh Google synthesis. Loaded from
+     * `assets/system_prompt_reverdict_v1.txt` in production. Default
+     * `{ "" }` keeps existing JVM tests + the legacy single-pass wiring
+     * compiling without touching every constructor call site; an empty
+     * prompt does NOT short-circuit (we leave that decision to the
+     * pipeline) but the model will refuse to emit a usable JSON which
+     * collapses to [ReverdictOutcome.Failure] — graceful degradation.
+     */
+    private val reverdictPromptProvider: () -> String = { "" },
+    /**
      * Base64 encoder seam. Production wiring uses `android.util.Base64`
      * with the `NO_WRAP` flag (matches the architecture D3.3 spec — body
      * must be one line so the JSON stays valid). Tests inject
@@ -126,6 +137,7 @@ class GeminiClient(
     }
 
     private val systemPrompt: String by lazy { systemPromptProvider() }
+    private val reverdictPrompt: String by lazy { reverdictPromptProvider() }
     private val responseSchema by lazy { GeminiRequest.buildResponseSchema() }
 
     /**
@@ -241,6 +253,112 @@ class GeminiClient(
 
         logOutcome(outcome)
         return outcome
+    }
+
+    /**
+     * Second Gemini pass — re-evaluates the verdict using the SerpAPI
+     * Google synthesis as the authoritative ground truth. Text-only call
+     * (no image, no Search Grounding tools) using the `system_prompt_reverdict_v1`
+     * asset. Cheap + fast compared to [verify] (no image base64, no tools).
+     *
+     * **Single error funnel** mirrors [verify] : every failure (no API
+     * key, blank inputs, network error, parse failure, timeout) collapses
+     * to [ReverdictOutcome.Failure]. The pipeline's [CapturePipeline.enrichWithSerp]
+     * treats Failure as "stick with the Gemini-1 verdict" — graceful
+     * degradation per the SerpAPI-failure precedent.
+     *
+     * **No retry** on this pass — the latency cost of a retried 2nd call
+     * would push the user-visible budget past the comfort zone, and the
+     * fall-back (Gemini #1 verdict + SerpAPI sources) is already a
+     * complete UX.
+     */
+    internal suspend fun reverdict(claim: String, serpMarkdown: String): ReverdictOutcome {
+        if (claim.isBlank() || serpMarkdown.isBlank()) {
+            Log.d(TAG, "reverdict skipped — blank inputs")
+            return ReverdictOutcome.Failure
+        }
+        val apiKey = apiKeyProvider()
+        if (apiKey.isBlank()) {
+            Log.d(TAG, "reverdict skipped — no Gemini API key")
+            return ReverdictOutcome.Failure
+        }
+        val prompt = reverdictPrompt
+        if (prompt.isBlank()) {
+            Log.d(TAG, "reverdict skipped — reverdict prompt not wired")
+            return ReverdictOutcome.Failure
+        }
+
+        return try {
+            val body = withContext(Dispatchers.Default) {
+                GeminiRequest.buildReverdict(
+                    systemPrompt = prompt,
+                    claim = claim,
+                    serpMarkdown = serpMarkdown,
+                )
+            }
+            val url = endpointBase.toHttpUrl().newBuilder()
+                .addPathSegment("$model:generateContent")
+                .addQueryParameter("key", apiKey)
+                .build()
+            val request = Request.Builder()
+                .url(url)
+                .post(body.toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val (code, responseBody) = withContext(Dispatchers.IO) {
+                executeCall(httpClient.newCall(request))
+            }
+
+            if (code != HTTP_OK) {
+                Log.w(TAG, "reverdict HTTP $code")
+                return ReverdictOutcome.Failure
+            }
+            withContext(Dispatchers.Default) { parseReverdict(responseBody) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            logFailure("reverdict failure", e)
+            ReverdictOutcome.Failure
+        }
+    }
+
+    /**
+     * Two-stage parse mirroring [parseVerdict] but mapping into the
+     * 4-field [ReverdictOutcome.Success] surface. Markdown-fence stripping
+     * is preserved — Gemini still wraps the JSON in ```json ... ``` despite
+     * the prompt asking otherwise.
+     */
+    private fun parseReverdict(rawBody: String): ReverdictOutcome {
+        val envelope = try {
+            json.decodeFromString(GenerateContentResponse.serializer(), rawBody)
+        } catch (e: SerializationException) {
+            Log.w(TAG, "reverdict envelope parse failed: ${e::class.simpleName}")
+            return ReverdictOutcome.Failure
+        }
+        val text = envelope.candidates.firstOrNull()
+            ?.content?.parts?.firstOrNull()?.text
+        if (text.isNullOrBlank()) {
+            Log.w(TAG, "reverdict empty parts[0].text")
+            return ReverdictOutcome.Failure
+        }
+        val cleaned = text
+            .trim()
+            .removePrefix("```json")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+        val parsed = try {
+            json.decodeFromString(GeminiVerdictResponse.serializer(), cleaned)
+        } catch (e: SerializationException) {
+            Log.w(TAG, "reverdict body parse failed: ${e::class.simpleName}")
+            return ReverdictOutcome.Failure
+        }
+        return ReverdictOutcome.Success(
+            verdictLabel = parsed.verdictLabel,
+            headline = stripVerdictPrefix(parsed.headline, parsed.verdictLabel),
+            contextLines = parsed.contextLines,
+            regionalBiasNote = parsed.regionalBiasNote,
+        )
     }
 
     /**

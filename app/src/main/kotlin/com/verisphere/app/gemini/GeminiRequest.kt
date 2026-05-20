@@ -134,6 +134,51 @@ internal object GeminiRequest {
     }
 
     /**
+     * Build the request body for the reverdict pass (Gemini #2 after
+     * SerpAPI). Text-only — no image, no `tools` (Search Grounding would
+     * be redundant since the SerpAPI markdown IS the search result). The
+     * model still gets `thinkingConfig.thinkingBudget = 0` for latency
+     * parity with the verify path.
+     *
+     * The body is intentionally tiny (a few KB of text vs ~50 KB JPEG in
+     * [build]) so the call is fast and cheap.
+     */
+    fun buildReverdict(
+        systemPrompt: String,
+        claim: String,
+        serpMarkdown: String,
+    ): String {
+        val userText = buildString {
+            append("Claim extrait (verbatim image, source language) :\n")
+            append(claim)
+            append("\n\nSynthèse Google (SerpAPI, la plus à jour) :\n")
+            append(serpMarkdown)
+            append("\n\nRends le verdict final en JSON.")
+        }
+        val body = buildJsonObject {
+            putJsonArray("contents") {
+                addJsonObject {
+                    put("role", "user")
+                    putJsonArray("parts") {
+                        addJsonObject {
+                            put("text", systemPrompt)
+                        }
+                        addJsonObject {
+                            put("text", userText)
+                        }
+                    }
+                }
+            }
+            putJsonObject("generationConfig") {
+                putJsonObject("thinkingConfig") {
+                    put("thinkingBudget", 0)
+                }
+            }
+        }
+        return body.toString()
+    }
+
+    /**
      * Hand-rolled JSON Schema for [GeminiVerdictResponse]. We do NOT use
      * an external schema-derivation library (the architecture's
      * "weigh-before-add" rule — `kotlinx-serialization-json-okio` and

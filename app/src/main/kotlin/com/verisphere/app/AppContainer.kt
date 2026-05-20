@@ -137,6 +137,10 @@ class AppContainer(private val applicationContext: Context) {
             .open(SYSTEM_PROMPT_ASSET)
             .bufferedReader()
             .use { it.readText() }
+        val reverdictPrompt = applicationContext.assets
+            .open(REVERDICT_PROMPT_ASSET)
+            .bufferedReader()
+            .use { it.readText() }
         GeminiClient(
             httpClient = httpClient,
             // Story 10.1 — fresh-read on every verify so the user's
@@ -160,6 +164,7 @@ class AppContainer(private val applicationContext: Context) {
                     .getOrDefault("")
             },
             systemPromptProvider = { systemPrompt },
+            reverdictPromptProvider = { reverdictPrompt },
             base64Encoder = { bytes -> Base64.encodeToString(bytes, Base64.NO_WRAP) },
         )
     }
@@ -487,6 +492,7 @@ class AppContainer(private val applicationContext: Context) {
         private const val READ_TIMEOUT_SECONDS = 45L
         private const val CALL_TIMEOUT_SECONDS = 60L
         private const val SYSTEM_PROMPT_ASSET = "system_prompt_v1.txt"
+        private const val REVERDICT_PROMPT_ASSET = "system_prompt_reverdict_v1.txt"
     }
 }
 
