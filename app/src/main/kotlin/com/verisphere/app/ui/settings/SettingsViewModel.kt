@@ -203,11 +203,11 @@ class SettingsViewModel(
         val geminiOutcome = validateGeminiKey(snapshot.geminiKeyDraft)
         val serpOutcome = validateSerpKey(snapshot.serpKeyDraft)
 
-        // Hard gate on Gemini : per V0.2.0-beta code-review D5 resolution
-        // 2026-05-20, ANY non-Valid outcome (Empty OR InvalidFormat)
-        // cancels the save. V1 over-protection vs the spec letter
-        // "Empty AND previously-saved key only" — defensible because
-        // there is no explicit "Clear key" affordance (D3 deferred W7).
+        // Hard gate on Gemini : a non-Valid outcome (now only Empty —
+        // the format gate was dropped 2026-05-30) cancels the save. V1
+        // over-protection vs the spec letter "Empty AND previously-saved
+        // key only" — defensible because there is no explicit "Clear
+        // key" affordance (D3 deferred W7).
         if (geminiOutcome != GeminiKeyValidation.Valid) {
             _state.update {
                 it.copy(

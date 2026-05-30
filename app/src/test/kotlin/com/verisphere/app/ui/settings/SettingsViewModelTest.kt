@@ -30,8 +30,8 @@ import org.junit.Test
  *  2. `onGeminiKeyChange` / `onSerpKeyChange` updates drafts + drops
  *     prior validation
  *  3. `toggleGeminiVisibility` / `toggleSerpVisibility` flip the mask
- *  4. `onSave` validation matrix : InvalidFormat aborts, Empty aborts,
- *     Valid persists both keys via the orchestrator
+ *  4. `onSave` validation matrix : Empty aborts, Valid persists both
+ *     keys via the orchestrator
  *  5. `onSave` emits `SettingsEvent.KeysSaved` on success
  *  6. `onSave` resets `saveInFlight = false` in the `finally` block
  *     even when the underlying write throws (P2 IO-exception leak fix)
@@ -169,18 +169,20 @@ class SettingsViewModelTest {
     // ─── (4) onSave validation matrix ───────────────────────────────
 
     @Test
-    fun `onSave with InvalidFormat Gemini draft aborts without writing`() = runTest(testDispatcher) {
+    fun `onSave with short non-blank Gemini draft persists (no format gate)`() = runTest(testDispatcher) {
+        // 2026-05-30 — Gemini format validation dropped. Any non-blank
+        // draft is Valid and persists ; a wrong key surfaces server-side.
         val (orchestrator, store) = newOrchestrator()
         val vm = SettingsViewModel(orchestrator, ioDispatcher = testDispatcher)
         advanceUntilIdle()
-        vm.onGeminiKeyChange("garbage-not-AIza-prefixed")
+        vm.onGeminiKeyChange("short-key")
         vm.onSerpKeyChange("any-serp-token")
         vm.onSave()
         advanceUntilIdle()
         val state = vm.state.value
-        assertEquals(GeminiKeyValidation.InvalidFormat, state.geminiValidation)
+        assertEquals(GeminiKeyValidation.Valid, state.geminiValidation)
         assertFalse(state.saveInFlight)
-        assertTrue("orchestrator must not have been written", store.map.isEmpty())
+        assertEquals("short-key", store.map[KEY_USER_GEMINI_API_KEY])
     }
 
     @Test

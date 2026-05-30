@@ -4,17 +4,19 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * Story 10.1 — JVM coverage for [validateGeminiKey] + [validateSerpKey].
+ * JVM coverage for [validateGeminiKey] + [validateSerpKey].
  *
- * 8 cases per the story Tasks T2.3 :
- *   (a) empty, (b) blank (whitespace-only), (c) whitespace-padded valid
- *   (trim test), (d) valid 39-char AIza prefix, (e) valid 35-char floor,
- *   (f) 34-char too short, (g) wrong prefix, (h) numeric-only string.
- * Plus prefix-constant pin tests + SerpAPI coverage.
+ * Both gates (2026-05-30 — relaxed) accept any non-blank normalized
+ * result and return `Empty` otherwise : no prefix check, no length
+ * check. The `AIza` prefix is not guaranteed and any length assumption
+ * rejected valid keys, so format validation was dropped entirely. The
+ * Unicode-invisible cases here guard [normalizeApiKey] directly, since
+ * validation alone no longer distinguishes a stripped key from one that
+ * still carries an invisible.
  */
 class ApiKeyValidatorTest {
 
-    // ─── (a-h) Gemini validation matrix ─────────────────────────────
+    // ─── Gemini validation : non-blank only ─────────────────────────
 
     @Test
     fun `empty Gemini key returns Empty`() {
@@ -27,116 +29,70 @@ class ApiKeyValidatorTest {
     }
 
     @Test
-    fun `whitespace-padded valid Gemini key trims and validates as Valid`() {
-        // 39-char AIza-prefixed key, padded with whitespace on both sides.
+    fun `whitespace-padded Gemini key trims and validates as Valid`() {
         val core = "AIzaSy12345678901234567890123456789ABCD"
-        assertEquals(39, core.length)
-        val padded = "  $core  "
-        assertEquals(GeminiKeyValidation.Valid, validateGeminiKey(padded))
+        assertEquals(GeminiKeyValidation.Valid, validateGeminiKey("  $core  "))
     }
 
     @Test
-    fun `valid 39-char AIza-prefixed Gemini key returns Valid`() {
-        // Real-world Gemini API keys today are uniformly 39 chars.
-        val key = "AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ1234567"
-        assertEquals(39, key.length)
-        assertEquals(GeminiKeyValidation.Valid, validateGeminiKey(key))
+    fun `canonical 39-char Gemini key returns Valid`() {
+        assertEquals(
+            GeminiKeyValidation.Valid,
+            validateGeminiKey("AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ1234567"),
+        )
     }
 
     @Test
-    fun `exactly GEMINI_MIN_LENGTH chars AIza-prefixed Gemini key returns Valid`() {
-        // Pinned to the exact length (post-P9 — 39 exact, no longer a floor).
-        val key = "AIza" + "x".repeat(GEMINI_MIN_LENGTH - 4)
-        assertEquals(GEMINI_MIN_LENGTH, key.length)
-        assertEquals(GeminiKeyValidation.Valid, validateGeminiKey(key))
+    fun `non-AIza-prefix Gemini key returns Valid (no prefix gate)`() {
+        // The `AIza` prefix is not guaranteed on every Gemini key, so a
+        // key with a different prefix must be accepted.
+        assertEquals(GeminiKeyValidation.Valid, validateGeminiKey("gsk-some-other-prefix-1234567890"))
     }
 
     @Test
-    fun `38-char Gemini key one short of exact length returns InvalidFormat`() {
-        // P9 — tightened from "≥ 35 floor" to "== 39 exact". A 38-char
-        // key (1 char short of canonical) is rejected.
-        val key = "AIza" + "x".repeat(GEMINI_MIN_LENGTH - 5)
-        assertEquals(GEMINI_MIN_LENGTH - 1, key.length)
-        assertEquals(GeminiKeyValidation.InvalidFormat, validateGeminiKey(key))
+    fun `numeric-only Gemini key returns Valid (no format gate)`() {
+        assertEquals(
+            GeminiKeyValidation.Valid,
+            validateGeminiKey("1234567890123456789012345678901234567890"),
+        )
     }
 
     @Test
-    fun `40-char Gemini key one over exact length returns InvalidFormat`() {
-        // P9 — even paste-with-trailing-char must fail. (Real keys are
-        // never 40 chars, but a stray paste-suffix like a quote or a
-        // zero-width invisible AFTER normalization should still be caught.)
-        val key = "AIza" + "x".repeat(GEMINI_MIN_LENGTH - 3)
-        assertEquals(GEMINI_MIN_LENGTH + 1, key.length)
-        assertEquals(GeminiKeyValidation.InvalidFormat, validateGeminiKey(key))
+    fun `short Gemini key still Valid (no length gate)`() {
+        // 2026-05-30 — length validation dropped ; any non-blank key
+        // passes (mirrors the SerpAPI contract). A wrong key surfaces
+        // server-side, not via a local format block.
+        assertEquals(GeminiKeyValidation.Valid, validateGeminiKey("short"))
     }
 
-    // ─── P6 Unicode invisibles ──────────────────────────────────────
+    // ─── normalizeApiKey : whitespace + Unicode-invisible stripping ──
 
     @Test
-    fun `Gemini key with zero-width space U+200B is normalized and validates`() {
-        // P6 — paste from a markdown code-block on iOS Safari can leak
-        // a zero-width space ; trim() doesn't catch it, but
-        // normalizeApiKey does.
-        val withZwsp = "AIza" + "x".repeat(GEMINI_MIN_LENGTH - 4 - 1) + "​x"
-        // 40 chars including the ZWSP ; should normalize back to 39.
-        assertEquals(GEMINI_MIN_LENGTH + 1, withZwsp.length)
-        assertEquals(GeminiKeyValidation.Valid, validateGeminiKey(withZwsp))
+    fun `normalizeApiKey strips a zero-width space U+200B`() {
+        // P6 — paste from a markdown code-block can leak a zero-width
+        // space ; trim() doesn't catch it, normalizeApiKey does. Built
+        // from a code point so the source carries no literal invisible.
+        val zwsp = Char(0x200B)
+        assertEquals("AIzaKEY", normalizeApiKey("AIza${zwsp}KEY"))
     }
 
     @Test
-    fun `Gemini key with BOM U+FEFF is normalized and validates`() {
-        // Same trap, different code point (byte-order mark / zero-width
-        // no-break space).
-        val withBom = "﻿AIza" + "x".repeat(GEMINI_MIN_LENGTH - 4)
-        assertEquals(GeminiKeyValidation.Valid, validateGeminiKey(withBom))
+    fun `normalizeApiKey strips a BOM U+FEFF`() {
+        val bom = Char(0xFEFF)
+        assertEquals("AIzaKEY", normalizeApiKey("${bom}AIzaKEY"))
     }
 
     @Test
-    fun `Gemini key with LRM U+200E is normalized and validates`() {
-        // Left-to-right mark — survives trim().
-        val withLrm = "AIza" + "x".repeat(GEMINI_MIN_LENGTH - 4) + "‎"
-        assertEquals(GeminiKeyValidation.Valid, validateGeminiKey(withLrm))
+    fun `normalizeApiKey strips a left-to-right mark U+200E`() {
+        val lrm = Char(0x200E)
+        assertEquals("AIzaKEY", normalizeApiKey("AIzaKEY${lrm}"))
     }
 
     @Test
-    fun `normalizeApiKey strips internal spaces too`() {
-        // Defensive : if a user pastes a key with a literal space
-        // mid-string (typo or accidental concatenation), strip it
-        // rather than reject — likely the user's intent.
-        val withSpaces = "AIza Sy ABC DEF GHI JKL MNO PQR STU VWX YZ123 4567"
-        assertEquals(GeminiKeyValidation.Valid, validateGeminiKey(withSpaces))
-    }
-
-    @Test
-    fun `wrong-prefix Gemini key returns InvalidFormat`() {
-        // Long enough to pass the length gate but doesn't start with
-        // "AIza" — typical paste-mistake.
-        val key = "AIzy-prefix-typo-12345678901234567890123"
-        assertEquals(GeminiKeyValidation.InvalidFormat, validateGeminiKey(key))
-    }
-
-    @Test
-    fun `numeric-only Gemini key returns InvalidFormat`() {
-        // No "AIza" prefix — even if long enough, fails format gate.
-        val key = "1234567890123456789012345678901234567890"
-        assertEquals(GeminiKeyValidation.InvalidFormat, validateGeminiKey(key))
-    }
-
-    // ─── Constant pin tests ─────────────────────────────────────────
-
-    @Test
-    fun `gemini prefix constant matches AIza`() {
-        // Pin the current prefix — fails loud if rotated without test update.
-        assertEquals("AIza", GEMINI_PREFIX)
-    }
-
-    @Test
-    fun `gemini length constant is 39`() {
-        // P9 — tightened from "35 minimum floor" to "39 exact" per
-        // 2026-05-20 code-review D2 resolution. Real Gemini keys are
-        // uniformly 39 chars ; the floor was over-permissive and
-        // admitted 35-38 char strings that fail server-side silently.
-        assertEquals(39, GEMINI_MIN_LENGTH)
+    fun `normalizeApiKey strips internal and surrounding whitespace`() {
+        // Defensive : a key pasted with stray spaces (typo / line wrap)
+        // is stripped rather than rejected — likely the user's intent.
+        assertEquals("AIzaSyABCDEF", normalizeApiKey("  AIza Sy ABC DEF  "))
     }
 
     // ─── SerpAPI validation ─────────────────────────────────────────

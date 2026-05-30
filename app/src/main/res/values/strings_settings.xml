@@ -23,9 +23,8 @@
 
     <!-- Gemini key field — required for the bubble to verify. -->
     <string name="settings_gemini_key_label">Clé API Gemini</string>
-    <string name="settings_gemini_key_hint">AIza…</string>
+    <string name="settings_gemini_key_hint">Colle ta clé ici</string>
     <string name="settings_gemini_key_helper">Obtiens ta clé sur aistudio.google.com/apikey</string>
-    <string name="settings_gemini_key_invalid">Format invalide — la clé Gemini commence par « AIza »</string>
     <string name="settings_gemini_key_required">Une clé Gemini est requise pour utiliser VeriSphere</string>
 
     <!-- SerpAPI key field — optional ; empty = SerpAPI disabled. -->

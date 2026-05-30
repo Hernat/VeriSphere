@@ -4,6 +4,12 @@ All notable changes to VeriSphere will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/), with the **Pre-V1 Release Policy** documented in [RELEASING.md](./RELEASING.md): the project starts at `0.1.0`; patches and small evolutions stay on `0.x.y`; **`1.0.0` is reserved for the moment the founder substitution success criterion is validated for ≥ 1 week of personal usage.**
 
+## [0.2.2] — 2026-05-30
+
+### Fixed
+
+- **Gemini API-key validation rejected valid keys** (`ApiKeyValidator.validateGeminiKey`). The Story 10.1 gate required the key to start with `AIza` **and** be exactly 39 chars (code-review D2, 2026-05-20). Field report (2026-05-30): the `AIza` prefix is not present on every Gemini key, so the prefix gate — and the equally-brittle exact-39 length gate — blocked valid keys with a hard `Format invalide` error and no way past it. The format gate is now **removed entirely**: `validateGeminiKey` returns `Valid` for any non-blank normalized result and `Empty` otherwise, identical to the SerpAPI contract in the same file (neither service publishes a stable key format we can rely on locally; a wrong key surfaces server-side rather than being blocked). Removed the `GeminiKeyValidation.InvalidFormat` state, the `GEMINI_PREFIX` + `GEMINI_MIN_LENGTH` constants (and their pin tests), the now-dead `settings_gemini_key_invalid` string, and the `InvalidFormat` branch in `SettingsScreen.geminiErrorMessageFor`. `normalizeApiKey` (whitespace + Unicode-invisible stripping) is unchanged — the stored key stays byte-identical to what the user pasted. UI: `settings_gemini_key_hint` `AIza…` → `Colle ta clé ici`. `ApiKeyValidatorTest` rewritten — prefix / numeric / short keys now assert `Valid`, and the Unicode-invisible cases assert `normalizeApiKey` directly (validation alone no longer distinguishes a stripped key); `SettingsViewModelTest` InvalidFormat-abort case re-cast as a short-key-persists case.
+
 ## [0.2.0-beta1] — 2026-05-19
 
 First public beta. Two large feature additions on top of the V1 baseline (Stories 1.1 → 7.5).

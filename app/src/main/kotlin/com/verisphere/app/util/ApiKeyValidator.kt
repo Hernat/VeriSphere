@@ -9,32 +9,24 @@ package com.verisphere.app.util
  *
  * Validation rules :
  *
- *  - **Gemini** (`validateGeminiKey`) — `normalizeApiKey(raw)` non-empty
- *    AND starts with [`GEMINI_PREFIX`] (`"AIza"`) AND length =
- *    [`GEMINI_MIN_LENGTH`] (39 chars per code-review D2 resolution
- *    2026-05-20). Real Gemini API keys today are uniformly 39 chars ;
- *    the pre-review "≥ 35 floor" admitted strings the server rejects
- *    silently.
- *  - **SerpAPI** (`validateSerpKey`) — `Valid` for any non-blank
- *    normalized result, `Empty` otherwise. SerpAPI publishes no key
- *    format ; we accept anything non-blank rather than introduce a
- *    brittle prefix gate.
- *
- * If Google ever rotates the Gemini key prefix or length, update
- * [`GEMINI_PREFIX`] / [`GEMINI_MIN_LENGTH`] here — these are the
- * single touch-points and the pinned-constant tests guard them.
+ *  - **Gemini** (`validateGeminiKey`) — `Valid` for any non-blank
+ *    normalized result, `Empty` otherwise. No format gate at all : the
+ *    earlier "must start with `AIza` AND be exactly 39 chars" gate (and
+ *    its 2026-05-30 successor, a length floor) rejected valid keys —
+ *    Google does not issue the `AIza` prefix for every Gemini key, and
+ *    any length assumption is just as brittle. A wrong key now surfaces
+ *    server-side rather than being blocked locally.
+ *  - **SerpAPI** (`validateSerpKey`) — identical contract : `Valid` for
+ *    any non-blank normalized result, `Empty` otherwise. SerpAPI
+ *    publishes no key format either.
  */
 sealed class GeminiKeyValidation {
-    /** The key passes the format gate ; safe to persist + use. */
+    /** The key is non-blank ; safe to persist + use. */
     data object Valid : GeminiKeyValidation()
 
     /** The key is missing or blank ; Settings save with empty drafts
      *  is treated as "no Gemini configured yet". */
     data object Empty : GeminiKeyValidation()
-
-    /** The key was non-empty but failed the format gate (wrong prefix
-     *  or wrong length) ; show inline error supporting text. */
-    data object InvalidFormat : GeminiKeyValidation()
 }
 
 sealed class SerpKeyValidation {
@@ -44,19 +36,6 @@ sealed class SerpKeyValidation {
     /** Blank ; treated as "user opted out of SerpAPI". */
     data object Empty : SerpKeyValidation()
 }
-
-/** Story 10.1 — Gemini key prefix (single touch-point if Google rotates). */
-const val GEMINI_PREFIX: String = "AIza"
-
-/**
- * Story 10.1 — Gemini key length. Real keys today are uniformly 39
- * characters ; the pre-2026-05-20-review draft used 35 as a "minimum
- * floor" but that admitted 35-38 char strings that pass the validator
- * + fail server-side with HTTP 400 → silent `Idle` (UX-DR15 silent
- * bucket). Tightened to exact 39 per code-review D2 resolution. If
- * Google ever publishes a different length, update this constant.
- */
-const val GEMINI_MIN_LENGTH: Int = 39
 
 // Unicode-invisible code points caught in addition to `Char.isWhitespace`
 // during [normalizeApiKey]. Built via integer code points (not literal
@@ -75,10 +54,9 @@ private val BOM: Char = Char(0xFEFF)     // byte-order-mark / zero-width no-brea
  * `trim()` because `Char.isWhitespace()` does not classify them as
  * whitespace, but they leak into pasted keys from rich-text sources
  * (iOS Safari paste from a markdown code-block, Slack copy, certain
- * email clients). A leaked invisible would make the key 40 chars
- * long, pass our `length == 39` check after stripping (we strip
- * before measuring), and otherwise fail server-side with HTTP 400 →
- * silent Idle. Normalising here closes the trap.
+ * email clients). A leaked invisible would be persisted verbatim and
+ * fail server-side with HTTP 400 → silent Idle. Stripping here keeps
+ * the stored key byte-identical to what the user copied.
  */
 internal fun normalizeApiKey(raw: String): String =
     raw.filterNot { ch ->
@@ -96,18 +74,16 @@ internal fun normalizeApiKey(raw: String): String =
     }
 
 /**
- * Returns the validation outcome for [raw] under the Gemini-format gate.
- * Normalizes the input via [normalizeApiKey] (strips ALL whitespace +
- * Unicode invisibles) ; callers should pass the normalized form to
- * `writeUserGeminiApiKey` so the stored value matches what was
- * validated.
+ * Returns the validation outcome for [raw]. Normalizes the input via
+ * [normalizeApiKey] (strips ALL whitespace + Unicode invisibles) ;
+ * callers should pass the normalized form to `writeUserGeminiApiKey` so
+ * the stored value matches what was validated. No format gate — any
+ * non-blank result is `Valid` (prefix / length assumptions rejected
+ * valid keys, see the class KDoc).
  */
 fun validateGeminiKey(raw: String): GeminiKeyValidation {
     val cleaned = normalizeApiKey(raw)
-    if (cleaned.isEmpty()) return GeminiKeyValidation.Empty
-    if (!cleaned.startsWith(GEMINI_PREFIX)) return GeminiKeyValidation.InvalidFormat
-    if (cleaned.length != GEMINI_MIN_LENGTH) return GeminiKeyValidation.InvalidFormat
-    return GeminiKeyValidation.Valid
+    return if (cleaned.isEmpty()) GeminiKeyValidation.Empty else GeminiKeyValidation.Valid
 }
 
 /**

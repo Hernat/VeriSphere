@@ -363,7 +363,6 @@ private fun ApiKeyField(
 private fun geminiErrorMessageFor(validation: GeminiKeyValidation?): String? = when (validation) {
     null, GeminiKeyValidation.Valid -> null
     GeminiKeyValidation.Empty -> stringResource(R.string.settings_gemini_key_required)
-    GeminiKeyValidation.InvalidFormat -> stringResource(R.string.settings_gemini_key_invalid)
 }
 
 private const val SETTINGS_SCREEN_MIN_CONTENT_DP: Int = 600
